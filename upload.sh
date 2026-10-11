@@ -338,83 +338,129 @@ EOF
         echo "Generated on $(date)" >> source_changelog.txt
         echo "" >> source_changelog.txt
 
-        # For LineageOS 24.0, include custom commits from lineage-24-stone org by mayuresh2543
-        if [ "$branch" == "lineage-24.0" ] || [ "$ROM_NAME" == "LineageOS 24.0" ]; then
-            echo "🔍 Fetching custom commits from lineage-24-stone org..."
-            python3 - <<'EOF' 2>/dev/null || true
+        local python_cmd="python3"
+        if ! command -v python3 &>/dev/null && command -v python &>/dev/null; then
+            python_cmd="python"
+        fi
+
+        $python_cmd - "$branch" "$ROM_NAME" <<'EOF' 2>/dev/null || true
+import sys
 import urllib.request
 import json
 import re
 
-org_name = "lineage-24-stone"
-target_user = "mayuresh2543"
+branch = sys.argv[1] if len(sys.argv) > 1 else "lineage-23.2"
+rom_name = sys.argv[2] if len(sys.argv) > 2 else ""
 
 headers = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/vnd.github.v3+json"
 }
 
-try:
-    req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        repos = json.loads(resp.read().decode('utf-8'))
-except Exception:
-    repos = []
+all_projects = []
 
-org_changes = {}
-
-for r in repos:
-    repo_name = r.get("name")
-    if not repo_name:
-        continue
-    commits_url = f"https://api.github.com/repos/{org_name}/{repo_name}/commits?per_page=50"
+# Fetch custom commits from lineage-24-stone if LineageOS 24.0
+if branch == "lineage-24.0" or rom_name == "LineageOS 24.0":
+    org_name = "lineage-24-stone"
+    target_user = "mayuresh2543"
     try:
-        req = urllib.request.Request(commits_url, headers=headers)
+        req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
-            commits = json.loads(resp.read().decode('utf-8'))
-        
-        repo_commits = []
-        for c in commits:
-            msg = c.get("commit", {}).get("message", "").splitlines()[0]
-            if re.match(r"^Merge (branch|tag|remote-tracking branch|pull request)", msg, re.I):
-                continue
-            
-            committer_login = (c.get("committer") or {}).get("login", "").lower()
-            committer_name = c.get("commit", {}).get("committer", {}).get("name", "").lower()
-            author_login = (c.get("author") or {}).get("login", "").lower()
-            author_name = c.get("commit", {}).get("author", {}).get("name", "").lower()
-            
-            if any(target_user in x for x in [committer_login, committer_name, author_login, author_name]):
-                date = (c.get("commit", {}).get("committer", {}).get("date") or c.get("commit", {}).get("author", {}).get("date") or "Unknown")[:10]
-                repo_commits.append(f"- [{date}] {msg}")
-        
-        if repo_commits:
-            org_changes[f"{org_name}/{repo_name}"] = repo_commits
+            repos = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        pass
+        repos = []
 
-if org_changes:
+    for r in repos:
+        repo_name = r.get("name")
+        if not repo_name:
+            continue
+        commits_url = f"https://api.github.com/repos/{org_name}/{repo_name}/commits?per_page=100"
+        try:
+            req = urllib.request.Request(commits_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                commits = json.loads(resp.read().decode("utf-8"))
+            
+            repo_commits = []
+            latest_ts = ""
+            for c in commits:
+                msg = c.get("commit", {}).get("message", "").splitlines()[0]
+                if re.match(r"^Merge (branch|tag|remote-tracking branch|pull request)", msg, re.I):
+                    continue
+                
+                committer_login = (c.get("committer") or {}).get("login", "").lower()
+                committer_name = c.get("commit", {}).get("committer", {}).get("name", "").lower()
+                author_login = (c.get("author") or {}).get("login", "").lower()
+                author_name = c.get("commit", {}).get("author", {}).get("name", "").lower()
+                
+                if any(target_user in x for x in [committer_login, committer_name, author_login, author_name]):
+                    date_raw = c.get("commit", {}).get("committer", {}).get("date") or c.get("commit", {}).get("author", {}).get("date") or ""
+                    date_display = date_raw[:10] if date_raw else "Unknown"
+                    if not latest_ts and date_raw:
+                        latest_ts = date_raw
+                    repo_commits.append(f"- [{date_display}] {msg}")
+            
+            if repo_commits:
+                all_projects.append({
+                    "name": f"{org_name}/{repo_name}",
+                    "latest_ts": latest_ts or "0000",
+                    "commits": repo_commits
+                })
+        except Exception:
+            pass
+
+# Fetch upstream commits from LineageOS Gerrit (up to 500 changes)
+gerrit_url = f"https://review.lineageos.org/changes/?q=status:merged+branch:{branch}+-project:^.*_device_.*+-project:^.*mainline.*+(-project:^.*_kernel_.*+OR+project:^.*android_kernel_qcom_sm8350.*)+(-project:^.*android_hardware_.*+OR+project:^.*android_hardware_xiaomi.*)&n=500"
+
+try:
+    req = urllib.request.Request(gerrit_url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        content = resp.read().decode("utf-8")
+        if content.startswith(")]}'"):
+            content = content[4:].lstrip()
+        gerrit_data = json.loads(content)
+        
+        by_project = {}
+        for item in gerrit_data:
+            proj = item.get("project", "Unknown")
+            by_project.setdefault(proj, []).append(item)
+            
+        for proj, items in by_project.items():
+            proj_commits = []
+            latest_ts = ""
+            for it in items:
+                sub = it.get("subject", "")
+                submitted = it.get("submitted") or it.get("updated") or ""
+                date_display = submitted[:10] if submitted else "Unknown"
+                if not latest_ts and submitted:
+                    latest_ts = submitted
+                proj_commits.append(f"- [{date_display}] {sub}")
+            
+            if proj_commits:
+                all_projects.append({
+                    "name": proj,
+                    "latest_ts": latest_ts or "0000",
+                    "commits": proj_commits
+                })
+except Exception:
+    pass
+
+# Sort all projects across all orgs by newest commit timestamp descending
+all_projects.sort(key=lambda p: p["latest_ts"], reverse=True)
+
+if all_projects:
     with open("source_changelog.txt", "a", encoding="utf-8") as out:
-        out.write("## Device & Custom Changes (lineage-24-stone)\n\n")
-        for repo, commits in org_changes.items():
-            out.write(f"### {repo}\n")
-            for commit in commits:
-                out.write(f"{commit}\n")
+        for p in all_projects:
+            out.write(f"### {p['name']}\n")
+            for c in p["commits"]:
+                out.write(f"{c}\n")
             out.write("\n")
-        out.write("## LineageOS Platform Changes\n\n")
 EOF
-        fi
 
-        echo "🌐 Fetching upstream commits from LineageOS Gerrit..."
-        if curl -s -G "https://review.lineageos.org/changes/" --data-urlencode "q=status:merged branch:${branch} -project:^.*_device_.* -project:^.*mainline.* (-project:^.*_kernel_.* OR project:^.*android_kernel_qcom_sm8350.*) (-project:^.*android_hardware_.* OR project:^.*android_hardware_xiaomi.*)" -d "n=200" | sed '1d' | jq -r 'group_by(.project) | sort_by(.[0].submitted // .[0].updated // "") | reverse | .[] | "### " + .[0].project + "\n" + (map("- [" + ((.submitted // .updated // "Unknown") | .[0:10]) + "] " + .subject) | join("\n")) + "\n"' >> source_changelog.txt; then
-            if [ -s source_changelog.txt ]; then
-                echo "✅ Changelog saved to source_changelog.txt"
-                FILES_TO_UPLOAD+=("source_changelog.txt")
-            else
-                echo "⚠️ Gerrit API returned empty or failed to parse."
-            fi
+        if [ -s source_changelog.txt ]; then
+            echo "✅ Changelog saved to source_changelog.txt"
+            FILES_TO_UPLOAD+=("source_changelog.txt")
         else
-            echo "⚠️ Failed to fetch changelog from Gerrit."
+            echo "⚠️ Failed to generate changelog or empty."
         fi
     else
         echo "ℹ️ Skipping Changelog generation (Not LineageOS on stone/spes)"
