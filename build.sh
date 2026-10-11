@@ -829,11 +829,11 @@ EOF
     done
 
     # ==========================================
-    # Generate Changelog from Gerrit
+    # Generate Changelog from Gerrit & Custom Org
     # ==========================================
     if [[ "$ROM_NAME" == *"LineageOS"* ]] && { [ "$DEVICE" == "stone" ] || [ "$DEVICE" == "spes" ]; }; then
         echo "=========================================="
-        echo "📝 Generating Changelog from LineageOS Gerrit..."
+        echo "📝 Generating Changelog..."
         local branch="$REPO_INIT_BRANCH"
         if [ -z "$branch" ]; then
             branch="lineage-23.2"
@@ -842,7 +842,80 @@ EOF
         echo "# LineageOS Changelog (${branch})" > source_changelog.txt
         echo "Generated on $(date)" >> source_changelog.txt
         echo "" >> source_changelog.txt
+
+        # For LineageOS 24.0, include custom commits from lineage-24-stone org by mayuresh2543
+        if [ "$branch" == "lineage-24.0" ] || [ "$ROM_NAME" == "LineageOS 24.0" ]; then
+            echo "🔍 Fetching custom commits from lineage-24-stone org..."
+            python3 - <<'EOF' 2>/dev/null || true
+import urllib.request
+import json
+import re
+import os
+
+org_name = "lineage-24-stone"
+target_user = "mayuresh2543"
+
+headers = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/vnd.github.v3+json"
+}
+
+gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+if gh_token:
+    headers["Authorization"] = f"Bearer {gh_token}"
+
+try:
+    req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        repos = json.loads(resp.read().decode('utf-8'))
+except Exception:
+    repos = []
+
+org_changes = {}
+
+for r in repos:
+    repo_name = r.get("name")
+    if not repo_name:
+        continue
+    commits_url = f"https://api.github.com/repos/{org_name}/{repo_name}/commits?per_page=50"
+    try:
+        req = urllib.request.Request(commits_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            commits = json.loads(resp.read().decode('utf-8'))
         
+        repo_commits = []
+        for c in commits:
+            msg = c.get("commit", {}).get("message", "").splitlines()[0]
+            if re.match(r"^Merge (branch|tag|remote-tracking branch|pull request)", msg, re.I):
+                continue
+            
+            committer_login = (c.get("committer") or {}).get("login", "").lower()
+            committer_name = c.get("commit", {}).get("committer", {}).get("name", "").lower()
+            author_login = (c.get("author") or {}).get("login", "").lower()
+            author_name = c.get("commit", {}).get("author", {}).get("name", "").lower()
+            
+            if any(target_user in x for x in [committer_login, committer_name, author_login, author_name]):
+                date = (c.get("commit", {}).get("committer", {}).get("date") or c.get("commit", {}).get("author", {}).get("date") or "Unknown")[:10]
+                repo_commits.append(f"- [{date}] {msg}")
+        
+        if repo_commits:
+            org_changes[f"{org_name}/{repo_name}"] = repo_commits
+    except Exception:
+        pass
+
+if org_changes:
+    with open("source_changelog.txt", "a", encoding="utf-8") as out:
+        out.write("## Device & Custom Changes (lineage-24-stone)\n\n")
+        for repo, commits in org_changes.items():
+            out.write(f"### {repo}\n")
+            for commit in commits:
+                out.write(f"{commit}\n")
+            out.write("\n")
+        out.write("## LineageOS Platform Changes\n\n")
+EOF
+        fi
+
+        echo "🌐 Fetching upstream commits from LineageOS Gerrit..."
         if curl -s -G "https://review.lineageos.org/changes/" --data-urlencode "q=status:merged branch:${branch} -project:^.*_device_.* -project:^.*mainline.* (-project:^.*_kernel_.* OR project:^.*android_kernel_qcom_sm8350.*) (-project:^.*android_hardware_.* OR project:^.*android_hardware_xiaomi.*)" -d "n=200" | sed '1d' | jq -r 'group_by(.project) | sort_by(.[0].submitted // .[0].updated // "") | reverse | .[] | "### " + .[0].project + "\n" + (map("- [" + ((.submitted // .updated // "Unknown") | .[0:10]) + "] " + .subject) | join("\n")) + "\n"' >> source_changelog.txt; then
             if [ -s source_changelog.txt ]; then
                 echo "✅ Changelog saved to source_changelog.txt"
