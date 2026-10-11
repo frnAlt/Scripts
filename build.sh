@@ -850,7 +850,6 @@ EOF
 import urllib.request
 import json
 import re
-import os
 
 org_name = "lineage-24-stone"
 target_user = "mayuresh2543"
@@ -859,10 +858,6 @@ headers = {
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/vnd.github.v3+json"
 }
-
-gh_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-if gh_token:
-    headers["Authorization"] = f"Bearer {gh_token}"
 
 try:
     req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
