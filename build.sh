@@ -314,6 +314,8 @@ case "$DEVICE" in
                     "https://github.com/mayuresh-sources/infinity_build_soong.git build/soong"
                     "https://github.com/LineageOS/android_hardware_xiaomi.git -b lineage-23.2 hardware/xiaomi"
                     "https://github.com/mayuresh-sources/packages_apps_ViPER4AndroidFX.git packages/apps/ViPER4AndroidFX"
+                    "https://github.com/mayuresh-sources/packages_apps_DolbyUI.git packages/apps/DolbyUI"
+                    "https://github.com/mayuresh-sources/hardware_dolby.git hardware/dolby"
                 )
                 ;;
 
