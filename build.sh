@@ -10,7 +10,7 @@ LOG_FILE="build_${DEVICE}_$(date +%Y%m%d_%H%M).log"
 rm -f "/tmp/build_failed.lock"
 rm -f "./out/siso_failed_commands.sh" "out/siso_failed_commands.sh" 2>/dev/null || true
 
-export BUILD_USERNAME="mayuresh"
+export BUILD_USERNAME="frnAlt"
 if [ -d "/opt/crave" ]; then
     export BUILD_HOSTNAME="crave"
 else
@@ -26,8 +26,8 @@ exec 3>&1 4>&2
 exec 1> >(tee -a "$LOG_FILE") 2>&1
 
 # 📱 Telegram Notification Setup
-TELEGRAM_TOKEN="8801527482:AAFQgcYE2-whaawuPxR5akv5CB6uyjfs4XY"
-TELEGRAM_CHAT_ID="-1003914151464"
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 # ==========================================
 
 # Strict Execution: Abort on any failure
@@ -40,11 +40,14 @@ set -o pipefail
 # ==========================================
 send_tg_msg() {
     local MESSAGE="$1"
+    if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        return 0
+    fi
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
         -d "parse_mode=HTML" \
         -d "disable_web_page_preview=true" \
-        -d "text=${MESSAGE}" > /dev/null
+        -d "text=${MESSAGE}" > /dev/null 2>&1 || true
 }
 
 handle_error() {
@@ -217,7 +220,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 23.2"
                 ANDROID_VERSION="16-QPR2"
                 ROM_VERSION="23.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-23.2"
@@ -245,7 +248,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 22.2"
                 ANDROID_VERSION="15"
                 ROM_VERSION="22.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-22.2"
@@ -278,7 +281,7 @@ case "$DEVICE" in
             3)
                 ROM_NAME="YAAP 17"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/YAAP_stone"
+                GH_REPO="frnAlt/YAAP_stone"
 
                 REPO_INIT_URL="https://github.com/yaap/manifest.git"
                 REPO_INIT_BRANCH="seventeen"
@@ -298,7 +301,7 @@ case "$DEVICE" in
             4)
                 ROM_NAME="Infinity-X"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/Infinity-X_stone"
+                GH_REPO="frnAlt/Infinity-X_stone"
 
                 REPO_INIT_URL="https://github.com/projectinfinity-X/manifest"
                 REPO_INIT_BRANCH="17"
@@ -308,13 +311,13 @@ case "$DEVICE" in
                 BUILD_COMMAND="m bacon"
 
                 MANUAL_GIT_CLONES=(
-                    "https://github.com/mayuresh2543/device_xiaomi_stone_new.git -b infinity-17 device/xiaomi/stone"
-                    "https://github.com/mayuresh2543/vendor_xiaomi_stone.git vendor/xiaomi/stone"
-                    "https://github.com/mayuresh2543/kernel_xiaomi_stone_rebase.git kernel/xiaomi/stone"
-                    "https://github.com/mayuresh-sources/infinity_build_soong.git build/soong"
+                    "https://github.com/frnAlt/device_xiaomi_stone_new.git -b infinity-17 device/xiaomi/stone"
+                    "https://github.com/frnAlt/vendor_xiaomi_stone.git vendor/xiaomi/stone"
+                    "https://github.com/frnAlt/kernel_xiaomi_stone_rebase.git kernel/xiaomi/stone"
+                    "https://github.com/frnAlt/infinity_build_soong.git build/soong"
                     "https://github.com/LineageOS/android_hardware_xiaomi.git -b lineage-23.2 hardware/xiaomi"
-                    "https://github.com/mayuresh-sources/packages_apps_ViPER4AndroidFX.git packages/apps/ViPER4AndroidFX"
-                    "https://github.com/mayuresh-sources/hardware_dolby.git hardware/dolby"
+                    "https://github.com/frnAlt/packages_apps_ViPER4AndroidFX.git packages/apps/ViPER4AndroidFX"
+                    "https://github.com/frnAlt/hardware_dolby.git hardware/dolby"
                 )
                 ;;
 
@@ -322,7 +325,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 24.0"
                 ANDROID_VERSION="17"
                 ROM_VERSION="24.0"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
 
                 REPO_INIT_URL="https://github.com/lineage-24-stone/android.git"
                 REPO_INIT_BRANCH="lineage-24.0"
@@ -346,7 +349,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 20"
                 ANDROID_VERSION="13"
                 ROM_VERSION="20.0"
-                GH_REPO="mayuresh-releases/LineageOS_spes"
+                GH_REPO="frnAlt/LineageOS_spes"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-20.0"
@@ -410,7 +413,8 @@ sync_repositories() {
     rm -rf .repo/local_manifests/
     if [ "$USE_LOCAL_MANIFEST" == "true" ]; then
         echo "📄 Cloning local manifests..."
-        git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" https://github.com/Mayuresh2543/local_manifests.git .repo/local_manifests
+        LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests.git}"
+        git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
     else
         echo "⏭️ Skipping local manifests (Not supported by $ROM_NAME)."
     fi
@@ -868,7 +872,8 @@ all_projects = []
 # Fetch custom commits from lineage-24-stone if LineageOS 24.0
 if branch == "lineage-24.0" or rom_name == "LineageOS 24.0":
     org_name = "lineage-24-stone"
-    target_user = "mayuresh2543"
+    import os
+    target_user = os.environ.get("TARGET_USER", "frnAlt").lower()
     try:
         req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:

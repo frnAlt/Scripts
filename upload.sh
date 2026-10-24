@@ -10,16 +10,19 @@ else
 fi
 
 # 📱 Telegram Notification Setup
-TELEGRAM_TOKEN="8801527482:AAFQgcYE2-whaawuPxR5akv5CB6uyjfs4XY"
-TELEGRAM_CHAT_ID="-1003914151464"
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 
 send_tg_msg() {
     local MESSAGE="$1"
+    if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        return 0
+    fi
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
         -d "parse_mode=HTML" \
         -d "disable_web_page_preview=true" \
-        -d "text=${MESSAGE}" > /dev/null
+        -d "text=${MESSAGE}" > /dev/null 2>&1 || true
 }
 
 handle_error() {
@@ -36,7 +39,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 23.2"
                 ANDROID_VERSION="16-QPR2"
                 ROM_VERSION="23.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
                 REPO_INIT_BRANCH="lineage-23.2"
                 ;;
 
@@ -44,21 +47,21 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 22.2"
                 ANDROID_VERSION="15"
                 ROM_VERSION="22.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
                 REPO_INIT_BRANCH="lineage-22.2"
                 ;;
 
             3)
                 ROM_NAME="YAAP 17"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/YAAP_stone"
+                GH_REPO="frnAlt/YAAP_stone"
                 REPO_INIT_BRANCH="seventeen"
                 ;;
 
             4)
                 ROM_NAME="Infinity-X"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/Infinity-X_stone"
+                GH_REPO="frnAlt/Infinity-X_stone"
                 REPO_INIT_BRANCH="17"
                 ;;
 
@@ -66,7 +69,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 24.0"
                 ANDROID_VERSION="17"
                 ROM_VERSION="24.0"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="frnAlt/LineageOS_stone"
                 REPO_INIT_BRANCH="lineage-24.0"
                 ;;
 
@@ -84,7 +87,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 20"
                 ANDROID_VERSION="13"
                 ROM_VERSION="20.0"
-                GH_REPO="mayuresh-releases/LineageOS_spes"
+                GH_REPO="frnAlt/LineageOS_spes"
                 REPO_INIT_BRANCH="lineage-20.0"
                 ;;
 
@@ -362,7 +365,8 @@ all_projects = []
 # Fetch custom commits from lineage-24-stone if LineageOS 24.0
 if branch == "lineage-24.0" or rom_name == "LineageOS 24.0":
     org_name = "lineage-24-stone"
-    target_user = "mayuresh2543"
+    import os
+    target_user = os.environ.get("TARGET_USER", "frnAlt").lower()
     try:
         req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
