@@ -10,7 +10,7 @@ LOG_FILE="build_${DEVICE}_$(date +%Y%m%d_%H%M).log"
 rm -f "/tmp/build_failed.lock"
 rm -f "./out/siso_failed_commands.sh" "out/siso_failed_commands.sh" 2>/dev/null || true
 
-export BUILD_USERNAME="mayuresh"
+export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
 if [ -d "/opt/crave" ]; then
     export BUILD_HOSTNAME="crave"
 else
@@ -25,9 +25,9 @@ exec 3>&1 4>&2
 # Redirect all subsequent output to our log file via tee
 exec 1> >(tee -a "$LOG_FILE") 2>&1
 
-# 📱 Telegram Notification Setup
-TELEGRAM_TOKEN="8801527482:AAFQgcYE2-whaawuPxR5akv5CB6uyjfs4XY"
-TELEGRAM_CHAT_ID="-1003914151464"
+# 📱 Telegram Notification Setup (Disabled)
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 # ==========================================
 
 # Strict Execution: Abort on any failure
@@ -39,12 +39,8 @@ set -o pipefail
 # 📨 Core Helper Functions & Error Trap
 # ==========================================
 send_tg_msg() {
-    local MESSAGE="$1"
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" \
-        -d "text=${MESSAGE}" > /dev/null
+    # Telegram notifications disabled
+    return 0
 }
 
 handle_error() {
@@ -102,7 +98,7 @@ handle_error() {
 
             if [ "$UPLOADED_TO_GOFILE" == "false" ]; then
                 echo "⚠️ Gofile API unavailable or upload failed. Falling back to Pixeldrain for error log..."
-                local PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
+                local PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
                 local UPLOAD_RES=$(curl -s -u ":$PIXELDRAIN_API_KEY" -F "file=@${LOG_FILE}" "https://pixeldrain.com/api/file")
                 local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
                 if [ "$SUCCESS" == "true" ]; then
@@ -140,7 +136,7 @@ handle_error() {
 
             if [ "$UPLOADED_SISO_TO_GOFILE" == "false" ]; then
                 echo "⚠️ Gofile API unavailable or upload failed. Falling back to Pixeldrain for siso_failed_commands.sh..."
-                local PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
+                local PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
                 local UPLOAD_RES=$(curl -s --connect-timeout 10 --max-time 120 -u ":$PIXELDRAIN_API_KEY" -F "file=@${SISO_FAILED_FILE}" "https://pixeldrain.com/api/file")
                 local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
                 if [ "$SUCCESS" == "true" ]; then
@@ -213,11 +209,30 @@ case "$DEVICE" in
     "stone")
         DEVICE_NAME="Redmi Note 12 5G / Poco X5 5G (stone)"
         case "$ROM_CHOICE" in
-            1)
+            1|6)
+                ROM_NAME="Axion"
+                ANDROID_VERSION="16-QPR2"
+                ROM_VERSION="lineage-23.2"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/Axion_stone}"
+
+                REPO_INIT_URL="https://github.com/AxionAOSP/android.git"
+                REPO_INIT_BRANCH="lineage-23.2"
+                USE_LOCAL_MANIFEST="true"
+                LOCAL_MANIFEST_BRANCH="axion-16"
+                BUILD_TARGET="axion stone va"
+                BUILD_COMMAND="ax -br"
+
+                BASE_URL="${BASE_URL:-https://github.com/frnAlt}"
+                CUSTOM_REPOS=(
+                    "packages/apps/Updater|axion_a16_packages_apps_Updater"
+                )
+                ;;
+
+            lineage-23.2)
                 ROM_NAME="LineageOS 23.2"
                 ANDROID_VERSION="16-QPR2"
                 ROM_VERSION="23.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/LineageOS_stone}"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-23.2"
@@ -245,7 +260,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 22.2"
                 ANDROID_VERSION="15"
                 ROM_VERSION="22.2"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/LineageOS_stone}"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-22.2"
@@ -278,7 +293,7 @@ case "$DEVICE" in
             3)
                 ROM_NAME="YAAP 17"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/YAAP_stone"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/YAAP_stone}"
 
                 REPO_INIT_URL="https://github.com/yaap/manifest.git"
                 REPO_INIT_BRANCH="seventeen"
@@ -298,7 +313,7 @@ case "$DEVICE" in
             4)
                 ROM_NAME="Infinity-X"
                 ANDROID_VERSION="17"
-                GH_REPO="mayuresh-releases/Infinity-X_stone"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/Infinity-X_stone}"
 
                 REPO_INIT_URL="https://github.com/projectinfinity-X/manifest"
                 REPO_INIT_BRANCH="17"
@@ -308,13 +323,13 @@ case "$DEVICE" in
                 BUILD_COMMAND="m bacon"
 
                 MANUAL_GIT_CLONES=(
-                    "https://github.com/mayuresh2543/device_xiaomi_stone_new.git -b infinity-17 device/xiaomi/stone"
-                    "https://github.com/mayuresh2543/vendor_xiaomi_stone.git vendor/xiaomi/stone"
-                    "https://github.com/mayuresh2543/kernel_xiaomi_stone_rebase.git kernel/xiaomi/stone"
-                    "https://github.com/mayuresh-sources/infinity_build_soong.git build/soong"
+                    "https://github.com/frnAlt/device_xiaomi_stone_new.git -b infinity-17 device/xiaomi/stone"
+                    "https://github.com/frnAlt/vendor_xiaomi_stone.git vendor/xiaomi/stone"
+                    "https://github.com/frnAlt/kernel_xiaomi_stone_rebase.git kernel/xiaomi/stone"
+                    "https://github.com/frnAlt/infinity_build_soong.git build/soong"
                     "https://github.com/LineageOS/android_hardware_xiaomi.git -b lineage-23.2 hardware/xiaomi"
-                    "https://github.com/mayuresh-sources/packages_apps_ViPER4AndroidFX.git packages/apps/ViPER4AndroidFX"
-                    "https://github.com/mayuresh-sources/hardware_dolby.git hardware/dolby"
+                    "https://github.com/frnAlt/packages_apps_ViPER4AndroidFX.git packages/apps/ViPER4AndroidFX"
+                    "https://github.com/frnAlt/hardware_dolby.git hardware/dolby"
                 )
                 ;;
 
@@ -322,7 +337,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 24.0"
                 ANDROID_VERSION="17"
                 ROM_VERSION="24.0"
-                GH_REPO="mayuresh-releases/LineageOS_stone"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/LineageOS_stone}"
 
                 REPO_INIT_URL="https://github.com/lineage-24-stone/android.git"
                 REPO_INIT_BRANCH="lineage-24.0"
@@ -346,7 +361,7 @@ case "$DEVICE" in
                 ROM_NAME="LineageOS 20"
                 ANDROID_VERSION="13"
                 ROM_VERSION="20.0"
-                GH_REPO="mayuresh-releases/LineageOS_spes"
+                GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/LineageOS_spes}"
 
                 REPO_INIT_URL="https://github.com/LineageOS/android.git"
                 REPO_INIT_BRANCH="lineage-20.0"
@@ -410,7 +425,8 @@ sync_repositories() {
     rm -rf .repo/local_manifests/
     if [ "$USE_LOCAL_MANIFEST" == "true" ]; then
         echo "📄 Cloning local manifests..."
-        git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" https://github.com/Mayuresh2543/local_manifests.git .repo/local_manifests
+        LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests-1.git}"
+        git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
     else
         echo "⏭️ Skipping local manifests (Not supported by $ROM_NAME)."
     fi
@@ -663,7 +679,49 @@ process_artifacts() {
     rm -rf "$EXTRACT_DIR"
 
     case $ROM_CHOICE in
-        1|5)
+        1|6)
+            # 🟣 Axion Classic Response Structure
+            echo "Generating classic response ${DEVICE}.json for Axion..."
+            FILE_SIZE=$(stat -c %s "$ROM_ZIP")
+            FILE_HASH=$(md5sum "$ROM_ZIP" | awk '{print $1}')
+            GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
+            JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
+
+            ROM_TYPE=$(echo "$FILE_NAME" | grep -ioE "OFFICIAL|COMMUNITY|UNOFFICIAL" | head -n 1 | tr '[:lower:]' '[:upper:]')
+            [ -z "$ROM_TYPE" ] && ROM_TYPE="OFFICIAL"
+
+            ROM_VER=$(echo "$FILE_NAME" | cut -d'-' -f2)
+            if [[ ! "$ROM_VER" =~ ^[0-9]+(\.[0-9]+)* ]]; then
+                ROM_VER="16-QPR2"
+            fi
+
+            jq -n \
+              --arg dt "$BUILD_DATETIME" \
+              --arg fn "$FILE_NAME" \
+              --arg id "$FILE_HASH" \
+              --arg rt "$ROM_TYPE" \
+              --arg sz "$FILE_SIZE" \
+              --arg url "$GH_DOWNLOAD_URL" \
+              --arg ver "$ROM_VER" \
+              '{
+                response: [
+                  {
+                    datetime: ($dt | tonumber),
+                    filename: $fn,
+                    id: $id,
+                    romtype: $rt,
+                    size: ($sz | tonumber),
+                    url: $url,
+                    version: $ver
+                  }
+                ]
+              }' > "$JSON_FILE"
+
+            echo "✅ Created $JSON_FILE"
+            FILES_TO_UPLOAD+=("$JSON_FILE")
+            ;;
+
+        5|lineage-23.2)
             # 🟢 LineageOS Standard Structure (23.2 & 24.0)
             echo "Generating standard ${DEVICE}.json for LineageOS..."
             FILE_SIZE=$(stat -c %s "$ROM_ZIP")
@@ -868,7 +926,8 @@ all_projects = []
 # Fetch custom commits from lineage-24-stone if LineageOS 24.0
 if branch == "lineage-24.0" or rom_name == "LineageOS 24.0":
     org_name = "lineage-24-stone"
-    target_user = "mayuresh2543"
+    import os
+    target_user = os.environ.get("TARGET_USER", "frnAlt").lower()
     try:
         req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -977,7 +1036,7 @@ upload_and_notify() {
     echo "------------------------------------------"
     SERVER=$(curl -s --connect-timeout 5 https://api.gofile.io/servers | jq -r '.data.servers[0].name' 2>/dev/null || true)
     USE_PIXELDRAIN=false
-    PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
+    PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
 
     if [ -z "$SERVER" ] || [ "$SERVER" == "null" ]; then
         echo "⚠️ Failed to fetch a Gofile server. API might be down. Falling back to Pixeldrain..."
@@ -1191,7 +1250,7 @@ upload_and_notify() {
                 if [[ "$RES" == http* ]]; then
                     CHANGELOG_URL="$RES"
                 else
-                    PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
+                    PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
                     RES=$(curl -s --max-time 15 -u ":$PIXELDRAIN_API_KEY" -F "file=@source_changelog.txt" https://pixeldrain.com/api/file || true)
                     FILE_ID=$(echo "$RES" | jq -r '.id' 2>/dev/null || echo "$RES" | grep -o '"id":"[^"]*' | cut -d'"' -f4 || true)
                     if [ -n "$FILE_ID" ] && [ "$FILE_ID" != "null" ]; then

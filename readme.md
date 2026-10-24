@@ -1,10 +1,10 @@
-# Crave Scripts
+# Crave Scripts (Axion OS)
 
 > **Automated pipeline for building Android ROMs on Crave and uploading the output to Gofile.**
 
 ## 🛠️ About
 
-This repository contains a single, focused `build.sh` script used to automate custom ROM compilation on Crave environments. It handles the complete build process, generates OTA metadata, uploads the final artifacts to Gofile, and sends an automated Telegram notification with the download links.
+This repository contains a single, focused `build.sh` script used to automate custom ROM compilation on Crave environments. It handles the complete build process, generates OTA metadata, and uploads the final artifacts to Gofile.
 
 ## 🚀 Triggering a Build
 
@@ -12,34 +12,34 @@ To start a build on your Crave environment, simply copy and paste the command fo
 
 ### 📱 Xiaomi Poco X5 / Redmi Note 12 5G (`stone`)
 
-**LineageOS 23.2**
+**Axion OS (Default)**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s stone 1"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 1"
 ```
 
 **LineageOS 22.2**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s stone 2"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 2"
 ```
 
 **YAAP 17**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s stone 3"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 3"
 ```
 
 **Infinity-X**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s stone 4"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 4"
 ```
 
 **LineageOS 24.0**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s stone 5"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 5"
 ```
 
 ### 📱 Xiaomi Redmi Note 11 (`spes`)
 
 **LineageOS 20**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/16/build.sh | bash -s spes 1"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s spes 1"
 ```
