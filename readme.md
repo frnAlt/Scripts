@@ -11,5 +11,5 @@ This repository contains a single, focused `build.sh` script used to automate cu
 To start a build on your Crave environment, simply run the following command in your terminal:
 
 ```
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/mayuresh2543/Scripts/refs/heads/13-spes/build.sh | bash -s 1"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/13-spes/build.sh | bash -s 1"
 ```

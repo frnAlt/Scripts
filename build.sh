@@ -7,8 +7,8 @@ DEVICE="spes"
 START_TIME=$(date +%s)
 
 # 📱 Telegram Notification Setup
-TELEGRAM_TOKEN="8801527482:AAGiuNQtKJka2bbOxeZap25PDsgYEoK77AQ"
-TELEGRAM_CHAT_ID="-1003914151464"
+TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 # ==========================================
 
 # Strict Execution: Abort on any failure
@@ -22,10 +22,13 @@ set -o pipefail
 # This function sends whatever message we give it safely
 send_tg_msg() {
     local MESSAGE="$1"
+    if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+        return 0
+    fi
     curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
         -d "chat_id=${TELEGRAM_CHAT_ID}" \
         -d "parse_mode=HTML" \
-        -d "text=${MESSAGE}" > /dev/null
+        -d "text=${MESSAGE}" > /dev/null 2>&1 || true
 }
 
 # This function is triggered ONLY if the script crashes
@@ -94,7 +97,7 @@ case $ROM_CHOICE in
     1)
         ROM_NAME="LineageOS 20"
         ROM_VERSION="20.0"
-        GH_REPO="mayuresh-releases/LineageOS_spes"
+        GH_REPO="${GH_RELEASE_REPO:-${GH_RELEASE_OWNER:-frnAlt}/LineageOS_spes}"
 
         REPO_INIT_URL="https://github.com/LineageOS/android.git"
         REPO_INIT_BRANCH="lineage-20.0"
@@ -147,7 +150,8 @@ repo init -u "$REPO_INIT_URL" -b "$REPO_INIT_BRANCH" --git-lfs
 rm -rf .repo/local_manifests/
 if [ "$USE_LOCAL_MANIFEST" == "true" ]; then
     echo "📄 Cloning local manifests..."
-    git clone -b "$LOCAL_MANIFEST_BRANCH" https://github.com/Mayuresh2543/local_manifests.git .repo/local_manifests
+    LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests.git}"
+    git clone -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
 else
     echo "⏭️ Skipping local manifests (Not supported by $ROM_NAME)."
 fi
@@ -183,7 +187,7 @@ fi
 if [ ${#CUSTOM_REPOS[@]} -gt 0 ]; then
     echo "=========================================="
     echo "Syncing custom repositories in parallel for $ROM_NAME..."
-    BASE_URL="https://github.com/mayuresh-spes-sources"
+    BASE_URL="${BASE_URL:-https://github.com/frnAlt}"
 
     for repo_info in "${CUSTOM_REPOS[@]}"; do
         DIR="${repo_info%%|*}"
@@ -199,7 +203,7 @@ else
 fi
 
 # 3. Environment Variables
-export BUILD_USERNAME=mayuresh
+export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
 export BUILD_HOSTNAME=crave
 export TZ="Asia/Kolkata"
 
