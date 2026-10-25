@@ -17,29 +17,3 @@ To start a build on your Crave environment, simply copy and paste the command fo
 crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 1"
 ```
 
-**LineageOS 22.2**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 2"
-```
-
-**YAAP 17**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 3"
-```
-
-**Infinity-X**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 4"
-```
-
-**LineageOS 24.0**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s stone 5"
-```
-
-### 📱 Xiaomi Redmi Note 11 (`spes`)
-
-**LineageOS 20**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/axion-16/build.sh | bash -s spes 1"
-```
