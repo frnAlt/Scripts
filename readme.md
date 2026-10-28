@@ -37,6 +37,11 @@ crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Script
 crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 5"
 ```
 
+**Lunaris OS Android 16**
+```bash
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 6"
+```
+
 ### 📱 Xiaomi Redmi Note 11 (`spes`)
 
 **LineageOS 20**

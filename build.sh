@@ -335,6 +335,20 @@ case "$DEVICE" in
                 BUILD_COMMAND="m bacon"
                 ;;
 
+            6|"lunaris")
+                ROM_NAME="Lunaris OS"
+                ANDROID_VERSION="16"
+                ROM_VERSION="3.6"
+                GH_REPO="frnAlt/Lunaris_stone"
+
+                REPO_INIT_URL="https://github.com/Lunaris-AOSP/android.git"
+                REPO_INIT_BRANCH="16"
+                USE_LOCAL_MANIFEST="true"
+                LOCAL_MANIFEST_BRANCH="lunaris"
+                BUILD_TARGET="lineage_stone-bp2a-userdebug"
+                BUILD_COMMAND="m lunaris"
+                ;;
+
             *)
                 echo "❌ Invalid ROM choice for stone!"
                 handle_error $LINENO
@@ -413,7 +427,7 @@ sync_repositories() {
     rm -rf .repo/local_manifests/
     if [ "$USE_LOCAL_MANIFEST" == "true" ]; then
         echo "📄 Cloning local manifests..."
-        LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests.git}"
+        LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests-1.git}"
         git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
     else
         echo "⏭️ Skipping local manifests (Not supported by $ROM_NAME)."
@@ -575,7 +589,7 @@ compile_rom() {
         if [[ "$BUILD_TARGET" == *" "* ]]; then
             $BUILD_TARGET
         else
-            lunch "$BUILD_TARGET"
+            lunch "$BUILD_TARGET" || lunch "${BUILD_TARGET/-bp2a/}" || lunch "lineage_${DEVICE}-userdebug"
         fi
         set -eE   # 🟢 Turn strict mode back ON for the actual compilation
 
@@ -817,6 +831,47 @@ EOF
             else
                 echo "⚠️ Warning: Expected Infinity-X JSON at $(basename "$AUTO_JSON") but it was not found."
             fi
+            ;;
+
+        6|"lunaris")
+            # 🌙 Lunaris OS Structure
+            echo "Generating ${DEVICE}.json for Lunaris OS..."
+            FILE_SIZE=$(stat -c %s "$ROM_ZIP")
+            FILE_HASH=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
+            FILE_MD5=$(md5sum "$ROM_ZIP" | awk '{print $1}')
+            GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
+            JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
+
+            jq -n \
+              --arg dt "$BUILD_DATETIME" \
+              --arg fn "$FILE_NAME" \
+              --arg id "$FILE_HASH" \
+              --arg md5 "$FILE_MD5" \
+              --arg sz "$FILE_SIZE" \
+              --arg url "$GH_DOWNLOAD_URL" \
+              --arg ver "$ROM_VERSION" \
+              --arg dev "$DEVICE" \
+              '{
+                response: [
+                  {
+                    maintainer: "@Parvez52",
+                    currently_maintained: true,
+                    oem: "Xiaomi",
+                    device: $dev,
+                    filename: $fn,
+                    download: $url,
+                    timestamp: ($dt | tonumber),
+                    md5: $md5,
+                    sha256: $id,
+                    size: ($sz | tonumber),
+                    version: $ver,
+                    buildtype: "userdebug"
+                  }
+                ]
+              }' > "$JSON_FILE"
+
+            echo "✅ Created $JSON_FILE"
+            FILES_TO_UPLOAD+=("$JSON_FILE")
             ;;
 
     esac
