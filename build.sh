@@ -216,7 +216,21 @@ case "$DEVICE" in
     "stone")
         DEVICE_NAME="Redmi Note 12 5G / Poco X5 5G (stone)"
         case "$ROM_CHOICE" in
-            1)
+            1|6|"lunaris")
+                ROM_NAME="Lunaris OS"
+                ANDROID_VERSION="16.2"
+                ROM_VERSION="3.12"
+                GH_REPO="frnAlt/Lunaris_stone"
+
+                REPO_INIT_URL="https://github.com/Lunaris-AOSP/android"
+                REPO_INIT_BRANCH="16.2"
+                USE_LOCAL_MANIFEST="true"
+                LOCAL_MANIFEST_BRANCH="lunaris"
+                BUILD_TARGET="lineage_stone-bp2a-userdebug"
+                BUILD_COMMAND="m lunaris"
+                ;;
+
+            "lineage-23.2")
                 ROM_NAME="LineageOS 23.2"
                 ANDROID_VERSION="16-QPR2"
                 ROM_VERSION="23.2"
@@ -333,20 +347,6 @@ case "$DEVICE" in
                 LOCAL_MANIFEST_BRANCH="lineage-17"
                 BUILD_TARGET="lineage_stone-cp2a-userdebug"
                 BUILD_COMMAND="m bacon"
-                ;;
-
-            6|"lunaris")
-                ROM_NAME="Lunaris OS"
-                ANDROID_VERSION="16.2"
-                ROM_VERSION="3.12"
-                GH_REPO="frnAlt/Lunaris_stone"
-
-                REPO_INIT_URL="https://github.com/Lunaris-AOSP/android"
-                REPO_INIT_BRANCH="16.2"
-                USE_LOCAL_MANIFEST="true"
-                LOCAL_MANIFEST_BRANCH="lunaris"
-                BUILD_TARGET="lineage_stone-bp2a-userdebug"
-                BUILD_COMMAND="m lunaris"
                 ;;
 
             *)
@@ -681,7 +681,7 @@ process_artifacts() {
     rm -rf "$EXTRACT_DIR"
 
     case $ROM_CHOICE in
-        1|5)
+        5|"lineage-23.2")
             # 🟢 LineageOS Standard Structure (23.2 & 24.0)
             echo "Generating standard ${DEVICE}.json for LineageOS..."
             FILE_SIZE=$(stat -c %s "$ROM_ZIP")
@@ -833,7 +833,7 @@ EOF
             fi
             ;;
 
-        6|"lunaris")
+        1|6|"lunaris")
             # 🌙 Lunaris OS Structure
             echo "Generating ${DEVICE}.json for Lunaris OS..."
             FILE_SIZE=$(stat -c %s "$ROM_ZIP")
