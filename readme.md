@@ -12,39 +12,8 @@ To start a build on your Crave environment, simply copy and paste the command fo
 
 ### 📱 Xiaomi Poco X5 / Redmi Note 12 5G (`stone`)
 
-**LineageOS 23.2**
+**lunarisOS**
 ```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 1"
+crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/lunaris/build.sh | bash -s stone 1"
 ```
 
-**LineageOS 22.2**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 2"
-```
-
-**YAAP 17**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 3"
-```
-
-**Infinity-X**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 4"
-```
-
-**LineageOS 24.0**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 5"
-```
-
-**Lunaris OS Android 16**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s stone 6"
-```
-
-### 📱 Xiaomi Redmi Note 11 (`spes`)
-
-**LineageOS 20**
-```bash
-crave run --no-patch -- "curl -s https://raw.githubusercontent.com/frnAlt/Scripts/refs/heads/16/build.sh | bash -s spes 1"
-```
