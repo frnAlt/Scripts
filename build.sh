@@ -337,12 +337,12 @@ case "$DEVICE" in
 
             6|"lunaris")
                 ROM_NAME="Lunaris OS"
-                ANDROID_VERSION="16"
-                ROM_VERSION="3.6"
+                ANDROID_VERSION="16.2"
+                ROM_VERSION="3.12"
                 GH_REPO="frnAlt/Lunaris_stone"
 
-                REPO_INIT_URL="https://github.com/Lunaris-AOSP/android.git"
-                REPO_INIT_BRANCH="16"
+                REPO_INIT_URL="https://github.com/Lunaris-AOSP/android"
+                REPO_INIT_BRANCH="16.2"
                 USE_LOCAL_MANIFEST="true"
                 LOCAL_MANIFEST_BRANCH="lunaris"
                 BUILD_TARGET="lineage_stone-bp2a-userdebug"
@@ -865,7 +865,7 @@ EOF
                     sha256: $id,
                     size: ($sz | tonumber),
                     version: $ver,
-                    buildtype: "userdebug"
+                    buildtype: "UNOFFICIAL"
                   }
                 ]
               }' > "$JSON_FILE"
