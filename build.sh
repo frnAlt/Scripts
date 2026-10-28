@@ -1,212 +1,85 @@
 #!/bin/bash
 
-# ==========================================
-# ⚙️ Global Configuration
-# ==========================================
+# ============================================================
+# Crave Custom ROM Build Pipeline
+# ============================================================
+
 DEVICE=${1:-"stone"}
 ROM_CHOICE=${2:-1}
 START_TIME=$(date +%s)
 LOG_FILE="build_${DEVICE}_$(date +%Y%m%d_%H%M).log"
+
 rm -f "/tmp/build_failed.lock"
 rm -f "./out/siso_failed_commands.sh" "out/siso_failed_commands.sh" 2>/dev/null || true
 
-export BUILD_USERNAME="frnAlt"
+export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
 if [ -d "/opt/crave" ]; then
     export BUILD_HOSTNAME="crave"
 else
     export BUILD_HOSTNAME=$(hostname)
 fi
 
-# ==========================================
-# 📝 Setup Full-Script Logging
-# ==========================================
-# Save original stdout/stderr to fd 3 and 4
+# ============================================================
+# Logging Setup
+# ============================================================
 exec 3>&1 4>&2
-# Redirect all subsequent output to our log file via tee
 exec 1> >(tee -a "$LOG_FILE") 2>&1
 
-# 📱 Telegram Notification Setup
-TELEGRAM_TOKEN="${TELEGRAM_TOKEN:-}"
-TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-# ==========================================
-
-# Strict Execution: Abort on any failure
-# (-E and pipefail added to ensure Crave pipes trigger the trap correctly)
 set -eE
 set -o pipefail
 
-# ==========================================
-# 📨 Core Helper Functions & Error Trap
-# ==========================================
-send_tg_msg() {
-    local MESSAGE="$1"
-    if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-        return 0
-    fi
-    curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-        -d "chat_id=${TELEGRAM_CHAT_ID}" \
-        -d "parse_mode=HTML" \
-        -d "disable_web_page_preview=true" \
-        -d "text=${MESSAGE}" > /dev/null 2>&1 || true
-}
-
+# ============================================================
+# Signal & Error Handling
+# ============================================================
 handle_error() {
-    trap - ERR # Disable trap to prevent infinite loops
-    set +eE    # 🛑 CRITICAL: Turn off strict mode inside the handler
-    set +o pipefail # 🛑 Turn off pipefail so network errors don't kill the handler
+    trap - ERR
+    set +eE
+    set +o pipefail
     local FAILED_LINE="$1"
 
-    # Restore standard output/error to safely terminate the background logger
     exec 1>&3 2>&4
-    sleep 1 # Ensure tee finishes writing buffers to disk
+    sleep 1
 
-    # Prevent duplicate error notifications from subshell inheritance
     if [ -f "/tmp/build_failed.lock" ]; then
         exit 1
     fi
     touch "/tmp/build_failed.lock"
 
-    echo "❌ CRITICAL: Build failed on line $FAILED_LINE!"
+    local END_TIME=$(date +%s)
+    local ELAPSED_SECONDS=$((END_TIME - START_TIME))
+    local ELAPSED_MINUTES=$((ELAPSED_SECONDS / 60))
+    local REM_SECONDS=$((ELAPSED_SECONDS % 60))
 
-    local LOG_LINK=""
-    local SISO_LINK=""
-
-    # Ensure jq is installed
-    if ! command -v jq &> /dev/null; then
-        sudo apt-get install -y jq > /dev/null 2>&1 || true
+    echo "============================================================"
+    echo "[ERROR] Build failed on line ${FAILED_LINE}"
+    echo "[ERROR] Device:  ${DEVICE_NAME:-${DEVICE}}"
+    echo "[ERROR] ROM:     ${ROM_NAME:-Unknown}"
+    echo "[ERROR] Elapsed: ${ELAPSED_MINUTES}m ${REM_SECONDS}s"
+    if [ -f "$LOG_FILE" ]; then
+        echo "[ERROR] Log:     ${LOG_FILE}"
     fi
 
-    local SERVER=""
-    if command -v jq &> /dev/null; then
-        SERVER=$(curl -s --connect-timeout 5 https://api.gofile.io/servers | jq -r '.data.servers[0].name' 2>/dev/null || true)
-    fi
-
-    # Try to upload the log file if it exists
-    if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
-        if command -v gzip &> /dev/null && [[ "$LOG_FILE" != *.gz ]]; then
-            echo "🗜️ Compressing crash log..."
-            gzip -9 "$LOG_FILE"
-            LOG_FILE="${LOG_FILE}.gz"
-        fi
-        echo "☁️ Attempting to upload error log to Gofile..."
-
-        if command -v jq &> /dev/null; then
-            local UPLOADED_TO_GOFILE="false"
-
-            if [ -n "$SERVER" ] && [ "$SERVER" != "null" ]; then
-                local UPLOAD_RES=$(curl -s -F "file=@${LOG_FILE}" "https://${SERVER}.gofile.io/contents/uploadfile")
-                local STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
-                if [ "$STATUS" == "ok" ]; then
-                    LOG_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
-                    echo "✅ Error log uploaded successfully to Gofile!"
-                    UPLOADED_TO_GOFILE="true"
-                fi
-            fi
-
-            if [ "$UPLOADED_TO_GOFILE" == "false" ]; then
-                echo "⚠️ Gofile API unavailable or upload failed. Falling back to Pixeldrain for error log..."
-                local PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
-                local UPLOAD_RES=$(curl -s -u ":$PIXELDRAIN_API_KEY" -F "file=@${LOG_FILE}" "https://pixeldrain.com/api/file")
-                local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
-                if [ "$SUCCESS" == "true" ]; then
-                    local FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
-                    LOG_LINK="https://pixeldrain.com/u/$FILE_ID"
-                    echo "✅ Error log uploaded successfully to Pixeldrain!"
-                fi
-            fi
-        fi
-    fi
-
-    # Android 17: Upload siso_failed_commands.sh if present
     local SISO_FAILED_FILE="./out/siso_failed_commands.sh"
     if [ ! -f "$SISO_FAILED_FILE" ] && [ -f "out/siso_failed_commands.sh" ]; then
         SISO_FAILED_FILE="out/siso_failed_commands.sh"
     fi
-
     if [ -f "$SISO_FAILED_FILE" ]; then
-        echo "☁️ Attempting to upload $SISO_FAILED_FILE to Gofile..."
-        if command -v jq &> /dev/null; then
-            local UPLOADED_SISO_TO_GOFILE="false"
-
-            if [ -n "$SERVER" ] && [ "$SERVER" != "null" ]; then
-                local UPLOAD_RES=$(curl -s --connect-timeout 10 --max-time 120 -F "file=@${SISO_FAILED_FILE}" "https://${SERVER}.gofile.io/contents/uploadfile")
-                local STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
-                if [ "$STATUS" == "ok" ]; then
-                    local DL_PAGE=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
-                    if [ -n "$DL_PAGE" ] && [ "$DL_PAGE" != "null" ]; then
-                        SISO_LINK="$DL_PAGE"
-                        echo "✅ siso_failed_commands.sh uploaded successfully to Gofile!"
-                        UPLOADED_SISO_TO_GOFILE="true"
-                    fi
-                fi
-            fi
-
-            if [ "$UPLOADED_SISO_TO_GOFILE" == "false" ]; then
-                echo "⚠️ Gofile API unavailable or upload failed. Falling back to Pixeldrain for siso_failed_commands.sh..."
-                local PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
-                local UPLOAD_RES=$(curl -s --connect-timeout 10 --max-time 120 -u ":$PIXELDRAIN_API_KEY" -F "file=@${SISO_FAILED_FILE}" "https://pixeldrain.com/api/file")
-                local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
-                if [ "$SUCCESS" == "true" ]; then
-                    local FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
-                    if [ -n "$FILE_ID" ] && [ "$FILE_ID" != "null" ]; then
-                        SISO_LINK="https://pixeldrain.com/u/$FILE_ID"
-                        echo "✅ siso_failed_commands.sh uploaded successfully to Pixeldrain!"
-                    fi
-                fi
-            fi
-        fi
+        echo "[ERROR] Failed commands: ${SISO_FAILED_FILE}"
     fi
+    echo "============================================================"
 
-    local END_TIME=$(date +%s)
-    local ELAPSED_MINUTES=$(((END_TIME - START_TIME) / 60))
-    local ELAPSED_HOURS=$((ELAPSED_MINUTES / 60))
-    local REM_MINUTES=$((ELAPSED_MINUTES % 60))
-
-    local DISPLAY_TIME="${ELAPSED_MINUTES}m"
-    if [ "$ELAPSED_HOURS" -gt 0 ]; then
-        DISPLAY_TIME="${ELAPSED_HOURS}h ${REM_MINUTES}m"
-    fi
-
-    local DISPLAY_ROM="${ROM_NAME:-Unknown}"
-    local DISPLAY_ANDROID="${ANDROID_VERSION:-Unknown}"
-
-    local FAIL_MSG="❌ <b>BUILD FAILED</b>%0A%0A"
-    FAIL_MSG+="<blockquote>• <b>Device:</b> ${DEVICE_NAME}%0A"
-    FAIL_MSG+="• <b>ROM:</b> ${DISPLAY_ROM}%0A"
-    FAIL_MSG+="• <b>Android:</b> ${DISPLAY_ANDROID}%0A"
-    FAIL_MSG+="• <b>Time:</b> ${DISPLAY_TIME}%0A"
-    FAIL_MSG+="• <b>Error:</b> Line ${FAILED_LINE}"
-
-    if [ -n "$LOG_LINK" ]; then
-        FAIL_MSG="${FAIL_MSG}%0A• <b>Crash Log:</b> <a href=\"${LOG_LINK}\">View Crash Log</a>"
-    else
-        FAIL_MSG="${FAIL_MSG}%0A• <b>Crash Log:</b> Check Crave Logs"
-    fi
-
-    if [ -n "$SISO_LINK" ]; then
-        FAIL_MSG="${FAIL_MSG}%0A• <b>Failed Commands:</b> <a href=\"${SISO_LINK}\">View siso_failed_commands.sh</a>"
-    fi
-    FAIL_MSG="${FAIL_MSG}</blockquote>"
-
-    send_tg_msg "$FAIL_MSG"
-    
-    if [ -f "$LOG_FILE" ]; then
-        echo "🧹 Deleting error log $LOG_FILE to save space..."
-        rm -f "$LOG_FILE"
-    fi
-    
     exit 1
 }
 
-# Set the trap! If any command fails, run handle_error and pass the line number
 trap 'handle_error $LINENO' ERR
 
-# ==========================================
-# 🔀 The Switchboard (Define your ROMs here)
-# ==========================================
-echo "=========================================="
-echo "🔍 Analyzing Build Request..."
-echo "=========================================="
+# ============================================================
+# Target Configuration
+# ============================================================
+echo "============================================================"
+echo "[INFO] Analyzing build target configuration..."
+echo "============================================================"
+
 MANUAL_REMOVALS=()
 MANUAL_GIT_CLONES=()
 CUSTOM_REPOS=()
@@ -350,7 +223,7 @@ case "$DEVICE" in
                 ;;
 
             *)
-                echo "❌ Invalid ROM choice for stone!"
+                echo "[ERROR] Invalid ROM choice for stone: $ROM_CHOICE"
                 handle_error $LINENO
                 ;;
         esac
@@ -371,149 +244,109 @@ case "$DEVICE" in
                 LOCAL_MANIFEST_BRANCH="spes-13"
                 BUILD_TARGET="lineage_spes-userdebug"
                 BUILD_COMMAND="m bacon"
-
-                MANUAL_REMOVALS=(
-                    "hardware/google/pixel/kernel_headers/Android.bp"
-                    "hardware/lineage/compat/Android.bp"
-                )
-
-                BASE_URL="https://github.com/lineage-20-spes"
-                CUSTOM_REPOS=(
-                    "packages/apps/Updater|lineage_packages_apps_Updater"
-                    "build/make|lineage_android_build"
-                )
                 ;;
 
             *)
-                echo "❌ Invalid ROM choice for spes! (Only LineageOS is supported)"
+                echo "[ERROR] Invalid ROM choice for spes: $ROM_CHOICE"
                 handle_error $LINENO
                 ;;
         esac
         ;;
 
     *)
-        echo "❌ Invalid Device! Use 'stone' or 'spes'."
+        echo "[ERROR] Unsupported device: $DEVICE"
         handle_error $LINENO
         ;;
 esac
 
-echo "✅ Selected Device: $DEVICE"
-echo "✅ Selected ROM: $ROM_NAME"
-echo "✅ Android Version: ${ANDROID_VERSION:-Unknown}"
+echo "[INFO] Selected Device:  ${DEVICE_NAME}"
+echo "[INFO] Selected ROM:     ${ROM_NAME}"
+echo "[INFO] Android Version:  ${ANDROID_VERSION}"
+echo "[INFO] Build Hostname:   ${BUILD_HOSTNAME}"
 
-# ==========================================
-# 🛠️ Modular Execution Functions
-# ==========================================
-
-send_start_notification() {
-    echo "📱 Sending 'Build Started' notification..."
-    START_MSG="⏳ <b>BUILD STARTED</b>%0A%0A"
-    START_MSG+="<blockquote>• <b>Device:</b> ${DEVICE_NAME}%0A"
-    START_MSG+="• <b>ROM:</b> ${ROM_NAME}%0A"
-    START_MSG+="• <b>Android:</b> ${ANDROID_VERSION}%0A"
-    START_MSG+="• <b>Host:</b> ${BUILD_HOSTNAME}</blockquote>"
-    send_tg_msg "$START_MSG"
-}
+# ============================================================
+# Modular Execution Functions
+# ============================================================
 
 sync_repositories() {
-    echo "=========================================="
-    echo "🚀 Starting Build Environment Setup"
-    echo "=========================================="
+    echo "============================================================"
+    echo "[INFO] Initializing repository: ${REPO_INIT_URL} (${REPO_INIT_BRANCH})"
+    echo "============================================================"
 
-    # 1. Cleanup & Base Sync
     repo init -u "$REPO_INIT_URL" -b "$REPO_INIT_BRANCH" --git-lfs --depth=1
 
-    # Handle Local Manifests based on ROM choice
     rm -rf .repo/local_manifests/
     if [ "$USE_LOCAL_MANIFEST" == "true" ]; then
-        echo "📄 Cloning local manifests..."
+        echo "[INFO] Fetching local manifests from branch: ${LOCAL_MANIFEST_BRANCH}"
         LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests-1.git}"
         git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
     else
-        echo "⏭️ Skipping local manifests (Not supported by $ROM_NAME)."
+        echo "[INFO] Local manifests disabled for ${ROM_NAME}."
     fi
 
-    # Remove stale GCC prebuilts to prevent "Cannot remove project" repo sync errors (Android 17 only)
     if [ "$ANDROID_VERSION" == "17" ]; then
         rm -rf prebuilts/gcc 2>/dev/null || true
     fi
 
     if [ -f /opt/crave/resync.sh ]; then
-        echo "🚀 Running Crave resync..."
+        echo "[INFO] Executing Crave resync routine..."
         /opt/crave/resync.sh
     else
-        echo "🚀 Running standard repo sync..."
+        echo "[INFO] Executing repo sync..."
         for i in {1..3}; do
             repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune --force-sync -j$(nproc --all) && break || {
                 if [ $i -eq 3 ]; then
-                    echo "❌ Repo sync failed after 3 attempts."
+                    echo "[ERROR] Repo sync failed after 3 attempts."
                     handle_error $LINENO
                 fi
-                echo "⚠️ repo sync failed, retrying in 30 seconds... ($i/3)"
+                echo "[WARN] Repo sync attempt $i failed. Retrying in 30 seconds..."
                 sleep 30
             }
         done
     fi
 
-    # 1.4 Execute Manual Removals (If any are defined)
     if [ ${#MANUAL_REMOVALS[@]} -gt 0 ]; then
-        echo "=========================================="
-        echo "🧹 Executing Manual Conflict Removals..."
+        echo "[INFO] Removing conflicting paths..."
         for rm_target in "${MANUAL_REMOVALS[@]}"; do
-            echo "🗑️ Removing $rm_target..."
+            echo "[INFO] Removing ${rm_target}..."
             rm -rf "$rm_target"
         done
     fi
 
-    # 1.5 Execute Manual Git Clones (If any are defined)
     if [ ${#MANUAL_GIT_CLONES[@]} -gt 0 ]; then
-        echo "=========================================="
-        echo "⬇️ Executing Manual Git Clones in parallel..."
+        echo "[INFO] Executing manual git clones..."
         for clone_args in "${MANUAL_GIT_CLONES[@]}"; do
             TARGET_DIR=$(echo "$clone_args" | awk '{print $NF}')
-            echo "🗑️ Removing $TARGET_DIR to prepare for clean clone..."
             rm -rf "$TARGET_DIR"
-            
-            # Execute unquoted clone_args to allow bash word splitting for URL, -b branch, and TARGET
             git clone --depth=1 $clone_args &
         done
-        wait # Wait for all manual clones to finish
+        wait
     fi
 
-    # 2. Parallel Custom Source Sync
     if [ ${#CUSTOM_REPOS[@]} -gt 0 ]; then
-        echo "=========================================="
-        echo "Syncing custom repositories in parallel for $ROM_NAME..."
-
+        echo "[INFO] Syncing custom repositories for ${ROM_NAME}..."
         for repo_info in "${CUSTOM_REPOS[@]}"; do
             DIR="${repo_info%%|*}"
             REPO_NAME="${repo_info##*|}"
-
             rm -rf "$DIR"
             git clone "$BASE_URL/$REPO_NAME.git" --depth=1 "$DIR" &
         done
-        wait # Wait for all background tasks to finish
-        echo "✅ Custom sources synced."
-    else
-        echo "⏭️ No custom repos defined for $ROM_NAME. Skipping parallel sync."
+        wait
+        echo "[INFO] Custom sources synchronized."
     fi
 
-    # 2.5 Ensure Clang r614150 is present for kernel build (stone)
     if [ "$DEVICE" == "stone" ]; then
         CLANG_TARGET_DIR="prebuilts/clang/host/linux-x86/clang-r614150"
         if [ ! -d "$CLANG_TARGET_DIR" ] || [ ! -x "$CLANG_TARGET_DIR/bin/clang" ]; then
-            echo "=========================================="
-            echo "📥 Fetching Clang r614150 for kernel build..."
+            echo "[INFO] Setting up Clang r614150 toolchain..."
             rm -rf "$CLANG_TARGET_DIR"
             mkdir -p "$CLANG_TARGET_DIR"
 
             CLANG_URL="https://github.com/bachnxuan/aosp_clang_mirror/releases/download/clang-r614150-16165221/clang-r614150.tar.gz"
-            echo "⬇️ Downloading from $CLANG_URL..."
             wget -q "$CLANG_URL" -O /tmp/clang-download.tar.gz
             tar -xf /tmp/clang-download.tar.gz -C "$CLANG_TARGET_DIR"
             rm -f /tmp/clang-download.tar.gz
 
-            # Flatten nested folder if tarball unpacked into a subfolder
             if [ ! -f "$CLANG_TARGET_DIR/bin/clang" ]; then
                 NESTED_DIR=$(find "$CLANG_TARGET_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
                 if [ -n "$NESTED_DIR" ] && [ -f "$NESTED_DIR/bin/clang" ]; then
@@ -530,43 +363,38 @@ sync_repositories() {
                 set +eE
                 CLANG_VER=$("$CLANG_TARGET_DIR/bin/clang" --version 2>/dev/null | head -n 1 || echo "r614150")
                 set -eE
-                echo "✅ Clang ready at $CLANG_TARGET_DIR ($CLANG_VER)"
+                echo "[INFO] Clang configured: ${CLANG_VER}"
             else
-                echo "⚠️ Clang binary was not found in $CLANG_TARGET_DIR/bin/clang after extraction."
+                echo "[WARN] Clang binary missing at ${CLANG_TARGET_DIR}/bin/clang after extraction."
             fi
         else
-            echo "✅ Clang r614150 already present in tree."
+            echo "[INFO] Clang r614150 toolchain verified."
         fi
     fi
 
-    # 3. Post-Sync Fixes for YAAP
     if [[ "$ROM_NAME" == *"YAAP"* ]]; then
-        echo "🔧 Fixing genfscon /class/typec conflict for YAAP..."
+        echo "[INFO] Applying genfscon fix for YAAP..."
         find device/qcom/sepolicy_vndr -name "genfs_contexts" -exec sed -i '/genfscon sysfs \/class\/typec/d' {} + 2>/dev/null || true
     fi
 
-    # 3. Post-Sync Fixes for Android 13 (spes only)
     if [ "$DEVICE" == "spes" ]; then
-        echo "🔧 Fixing unrecognized Soong properties for Android 13..."
+        echo "[INFO] Applying Android 13 compatibility fixes for spes..."
         find packages/apps/ViPER4AndroidFX vendor/bcr -name "Android.bp" -exec sed -i '/preprocessed:/d' {} + 2>/dev/null || true
     fi
 }
 
 compile_rom() {
-    # 3. Environment Variables
     export TZ="Asia/Kolkata"
 
-    # 📦 Install legacy Ncurses via apt as requested (spes only)
     if [ "$DEVICE" == "spes" ]; then
         if ! dpkg -s libncurses5 &> /dev/null; then
-            echo "📦 Installing legacy libncurses5 dependencies via sudo..."
+            echo "[INFO] Installing libncurses5 compatibility packages..."
             sudo apt-get update -y
             sudo apt-get install -y libncurses5 libtinfo5 || true
         fi
         
-        # 🔧 Fallback to System Symlink Hack if apt failed (Ubuntu 24.04 dropped it)
         if ! dpkg -s libncurses5 &> /dev/null; then
-            echo "🔧 apt failed (likely Ubuntu 24.04). Applying ncurses6 system symlink hack..."
+            echo "[INFO] Linking ncurses6 system fallback libraries..."
             NCURSES_LIB=$(find /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib /lib -maxdepth 2 -name "libncurses.so.6*" -print -quit 2>/dev/null)
             TINFO_LIB=$(find /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/lib /lib -maxdepth 2 -name "libtinfo.so.6*" -print -quit 2>/dev/null)
             
@@ -582,8 +410,7 @@ compile_rom() {
         fi
     fi
 
-    # 4. Setup & Lunch
-    set +eE   # 🛑 Turn OFF strict mode
+    set +eE
     source build/envsetup.sh
     if [ -n "$BUILD_TARGET" ]; then
         if [[ "$BUILD_TARGET" == *" "* ]]; then
@@ -591,99 +418,115 @@ compile_rom() {
         else
             lunch "$BUILD_TARGET" || lunch "${BUILD_TARGET/-bp2a/}" || lunch "lineage_${DEVICE}-userdebug"
         fi
-        set -eE   # 🟢 Turn strict mode back ON for the actual compilation
+        set -eE
 
-        # 5. Prep the output directory
-        echo "Cleaning output directory..."
+        echo "[INFO] Cleaning target build environment..."
         m installclean
     else
         set -eE
-        echo "⏭️ Skipping lunch and installclean as requested (using full build command)..."
+        echo "[INFO] Using custom build command directly without lunch."
     fi
 
-    # 6. Compilation with Logging
-    echo "=========================================="
-    echo "🔨 Starting compilation for $ROM_NAME..."
-    if [ -n "$BUILD_TARGET" ]; then
-        echo "🚀 Initiating Build for $BUILD_TARGET..."
-    else
-        echo "🚀 Initiating Build..."
-    fi
-    echo "=========================================="
+    echo "============================================================"
+    echo "[INFO] Starting build for: ${ROM_NAME} (${BUILD_TARGET})"
+    echo "============================================================"
 
-    # Dynamically run whatever command the ROM needs
     rm -f "./out/siso_failed_commands.sh" "out/siso_failed_commands.sh" 2>/dev/null || true
     $BUILD_COMMAND
 
-    # Calculate precise time taken
-    END_TIME=$(date +%s)
-    BUILD_MINUTES=$(((END_TIME - START_TIME) / 60))
-    BUILD_HOURS=$((BUILD_MINUTES / 60))
-    REMAINING_MINUTES=$((BUILD_MINUTES % 60))
+    local END_TIME=$(date +%s)
+    local BUILD_MINUTES=$(((END_TIME - START_TIME) / 60))
+    local BUILD_HOURS=$((BUILD_MINUTES / 60))
+    local REMAINING_MINUTES=$((BUILD_MINUTES % 60))
 
     DISPLAY_TIME="${BUILD_MINUTES}m"
     if [ "$BUILD_HOURS" -gt 0 ]; then
         DISPLAY_TIME="${BUILD_HOURS}h ${REMAINING_MINUTES}m"
     fi
 
-    echo "⏱️ Build finished in $DISPLAY_TIME."
+    echo "[INFO] Build completed in: ${DISPLAY_TIME}"
 }
 
 process_artifacts() {
-    # ==========================================
-    # Post-Build Artifact Processing & Upload
-    # ==========================================
-    echo "=========================================="
-    echo "☁️ Preparing files for Gofile upload..."
+    echo "============================================================"
+    echo "[INFO] Inspecting build artifacts..."
+    echo "============================================================"
 
     if ! command -v jq &> /dev/null; then
-        echo "⚠️ 'jq' is missing. Installing..."
-        sudo apt-get install -y jq > /dev/null
+        sudo apt-get install -y jq > /dev/null 2>&1 || true
     fi
 
     TARGET_DIR="out/target/product/${DEVICE}"
     ROM_ZIP=$(ls -t ${TARGET_DIR}/*${DEVICE}*.zip 2>/dev/null | head -n 1 || true)
-    FILES_TO_UPLOAD=()
 
     if [ -z "$ROM_ZIP" ] || [ ! -f "$ROM_ZIP" ]; then
-        echo "❌ ROM zip not found in ${TARGET_DIR}."
+        echo "[ERROR] ROM package not found in ${TARGET_DIR}."
         handle_error $LINENO
     fi
 
-    FILES_TO_UPLOAD+=("$ROM_ZIP")
-    echo "✅ Found ROM: $(basename "$ROM_ZIP")"
+    echo "[INFO] Found target ROM: $(basename "$ROM_ZIP")"
 
-    # Compute checksums and size for Telegram notification
     ROM_SIZE_HUMAN=$(du -h "$ROM_ZIP" 2>/dev/null | awk '{print $1}' || echo "Unknown")
     ROM_SHA256=$(sha256sum "$ROM_ZIP" 2>/dev/null | awk '{print $1}' || echo "Unknown")
     ROM_MD5=$(md5sum "$ROM_ZIP" 2>/dev/null | awk '{print $1}' || echo "Unknown")
 
-    # ==========================================
-    # 📝 OTA JSON Metadata Generation / Handling
-    # ==========================================
-    echo "=========================================="
-    echo "📝 Processing OTA JSON Metadata..."
-
     FILE_NAME=$(basename "$ROM_ZIP")
     REL_TAG=$(date +%y%m%d)
 
-    # 🕒 Extract precise build datetime from ROM metadata
     EXTRACT_DIR=$(mktemp -d)
     unzip -p "$ROM_ZIP" META-INF/com/android/metadata > "$EXTRACT_DIR/metadata.txt" 2>/dev/null || true
     
     if grep -q "post-timestamp=" "$EXTRACT_DIR/metadata.txt" 2>/dev/null; then
         BUILD_DATETIME=$(grep "post-timestamp=" "$EXTRACT_DIR/metadata.txt" | cut -d= -f2 | tr -d '\r')
-        echo "✅ Extracted precise build datetime from zip: $BUILD_DATETIME"
+        echo "[INFO] Extracted build timestamp: ${BUILD_DATETIME}"
     else
         BUILD_DATETIME=$(date +%s)
-        echo "⚠️ Warning: Could not extract precise datetime from zip, using current time: $BUILD_DATETIME"
+        echo "[WARN] Unable to extract metadata timestamp. Using current timestamp: ${BUILD_DATETIME}"
     fi
     rm -rf "$EXTRACT_DIR"
 
     case $ROM_CHOICE in
+        1|6|"lunaris")
+            echo "[INFO] Generating OTA metadata for Lunaris OS..."
+            FILE_SIZE=$(stat -c %s "$ROM_ZIP")
+            FILE_HASH=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
+            FILE_MD5=$(md5sum "$ROM_ZIP" | awk '{print $1}')
+            GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
+            JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
+
+            jq -n \
+              --arg dt "$BUILD_DATETIME" \
+              --arg fn "$FILE_NAME" \
+              --arg id "$FILE_HASH" \
+              --arg md5 "$FILE_MD5" \
+              --arg sz "$FILE_SIZE" \
+              --arg url "$GH_DOWNLOAD_URL" \
+              --arg ver "$ROM_VERSION" \
+              --arg dev "$DEVICE" \
+              '{
+                response: [
+                  {
+                    maintainer: "@Parvez52",
+                    currently_maintained: true,
+                    oem: "Xiaomi",
+                    device: $dev,
+                    filename: $fn,
+                    download: $url,
+                    timestamp: ($dt | tonumber),
+                    md5: $md5,
+                    sha256: $id,
+                    size: ($sz | tonumber),
+                    version: $ver,
+                    buildtype: "UNOFFICIAL"
+                  }
+                ]
+              }' > "$JSON_FILE"
+
+            echo "[INFO] Generated ${JSON_FILE}"
+            ;;
+
         5|"lineage-23.2")
-            # 🟢 LineageOS Standard Structure (23.2 & 24.0)
-            echo "Generating standard ${DEVICE}.json for LineageOS..."
+            echo "[INFO] Generating OTA metadata for LineageOS..."
             FILE_SIZE=$(stat -c %s "$ROM_ZIP")
             FILE_HASH=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
             GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
@@ -713,13 +556,11 @@ process_artifacts() {
                 }
               ]' > "$JSON_FILE"
 
-            echo "✅ Created $JSON_FILE"
-            FILES_TO_UPLOAD+=("$JSON_FILE")
+            echo "[INFO] Generated ${JSON_FILE}"
             ;;
 
         2)
-            # 🟢 LineageOS 22.2 Classic Response Structure
-            echo "Generating classic response ${DEVICE}.json for LineageOS 22.2..."
+            echo "[INFO] Generating response metadata for LineageOS 22.2..."
             FILE_SIZE=$(stat -c %s "$ROM_ZIP")
             FILE_HASH=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
             GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
@@ -747,13 +588,11 @@ process_artifacts() {
                 ]
               }' > "$JSON_FILE"
 
-            echo "✅ Created $JSON_FILE"
-            FILES_TO_UPLOAD+=("$JSON_FILE")
+            echo "[INFO] Generated ${JSON_FILE}"
             ;;
 
         3)
-            # 🔵 YAAP Offset Payload Structure
-            echo "Generating payload-nested ${DEVICE}.json for YAAP..."
+            echo "[INFO] Generating YAAP payload metadata..."
             JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
 
             python3 - <<EOF > "$JSON_FILE"
@@ -814,494 +653,45 @@ data = {
 
 print(json.dumps(data, indent=2))
 EOF
-
-            echo "✅ Created YAAP structure $(basename "$JSON_FILE")"
-            FILES_TO_UPLOAD+=("$JSON_FILE")
+            echo "[INFO] Generated ${JSON_FILE}"
             ;;
 
         4)
-            # 🟡 Infinity-X Autogenerated Structure
-            echo "Locating autogenerated JSON for Infinity-X..."
-            # Infinity-X natively appends .json directly to the full zip filename (e.g., rom.zip.json)
             AUTO_JSON="${ROM_ZIP}.json"
-
             if [ -n "$AUTO_JSON" ] && [ -f "$AUTO_JSON" ]; then
-                echo "✅ Found autogenerated JSON: $(basename "$AUTO_JSON")"
-                FILES_TO_UPLOAD+=("$AUTO_JSON")
+                echo "[INFO] Autogenerated Infinity-X JSON: $(basename "$AUTO_JSON")"
             else
-                echo "⚠️ Warning: Expected Infinity-X JSON at $(basename "$AUTO_JSON") but it was not found."
+                echo "[WARN] Expected Infinity-X metadata not found at $(basename "$AUTO_JSON")"
             fi
             ;;
-
-        1|6|"lunaris")
-            # 🌙 Lunaris OS Structure
-            echo "Generating ${DEVICE}.json for Lunaris OS..."
-            FILE_SIZE=$(stat -c %s "$ROM_ZIP")
-            FILE_HASH=$(sha256sum "$ROM_ZIP" | awk '{print $1}')
-            FILE_MD5=$(md5sum "$ROM_ZIP" | awk '{print $1}')
-            GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
-            JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
-
-            jq -n \
-              --arg dt "$BUILD_DATETIME" \
-              --arg fn "$FILE_NAME" \
-              --arg id "$FILE_HASH" \
-              --arg md5 "$FILE_MD5" \
-              --arg sz "$FILE_SIZE" \
-              --arg url "$GH_DOWNLOAD_URL" \
-              --arg ver "$ROM_VERSION" \
-              --arg dev "$DEVICE" \
-              '{
-                response: [
-                  {
-                    maintainer: "@Parvez52",
-                    currently_maintained: true,
-                    oem: "Xiaomi",
-                    device: $dev,
-                    filename: $fn,
-                    download: $url,
-                    timestamp: ($dt | tonumber),
-                    md5: $md5,
-                    sha256: $id,
-                    size: ($sz | tonumber),
-                    version: $ver,
-                    buildtype: "UNOFFICIAL"
-                  }
-                ]
-              }' > "$JSON_FILE"
-
-            echo "✅ Created $JSON_FILE"
-            FILES_TO_UPLOAD+=("$JSON_FILE")
-            ;;
-
     esac
 
-    # ==========================================
-    # Append essential partition images
-    # ==========================================
     for IMG in boot.img dtb.img dtbo.img vendor_boot.img; do
         if [ -f "${TARGET_DIR}/$IMG" ]; then
-            FILES_TO_UPLOAD+=("${TARGET_DIR}/$IMG")
-            echo "✅ Found Image: $IMG"
-        else
-            echo "⚠️ Warning: $IMG not found. Skipping."
+            echo "[INFO] Found kernel partition image: ${IMG}"
         fi
     done
-
-    # ==========================================
-    # Generate Changelog from Gerrit & Custom Org
-    # ==========================================
-    if [[ "$ROM_NAME" == *"LineageOS"* ]] && { [ "$DEVICE" == "stone" ] || [ "$DEVICE" == "spes" ]; }; then
-        echo "=========================================="
-        echo "📝 Generating Changelog..."
-        local branch="$REPO_INIT_BRANCH"
-        if [ -z "$branch" ]; then
-            branch="lineage-23.2"
-        fi
-
-        echo "# LineageOS Changelog (${branch})" > source_changelog.txt
-        echo "Generated on $(date)" >> source_changelog.txt
-        echo "" >> source_changelog.txt
-
-        local python_cmd="python3"
-        if ! command -v python3 &>/dev/null && command -v python &>/dev/null; then
-            python_cmd="python"
-        fi
-
-        $python_cmd - "$branch" "$ROM_NAME" <<'EOF' 2>/dev/null || true
-import sys
-import urllib.request
-import json
-import re
-
-branch = sys.argv[1] if len(sys.argv) > 1 else "lineage-23.2"
-rom_name = sys.argv[2] if len(sys.argv) > 2 else ""
-
-headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/vnd.github.v3+json"
 }
 
-all_projects = []
-
-# Fetch custom commits from lineage-24-stone if LineageOS 24.0
-if branch == "lineage-24.0" or rom_name == "LineageOS 24.0":
-    org_name = "lineage-24-stone"
-    import os
-    target_user = os.environ.get("TARGET_USER", "frnAlt").lower()
-    try:
-        req = urllib.request.Request(f"https://api.github.com/orgs/{org_name}/repos?per_page=100", headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            repos = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        repos = []
-
-    for r in repos:
-        repo_name = r.get("name")
-        if not repo_name:
-            continue
-        commits_url = f"https://api.github.com/repos/{org_name}/{repo_name}/commits?per_page=100"
-        try:
-            req = urllib.request.Request(commits_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                commits = json.loads(resp.read().decode("utf-8"))
-            
-            repo_commits = []
-            latest_ts = ""
-            for c in commits:
-                msg = c.get("commit", {}).get("message", "").splitlines()[0]
-                if re.match(r"^Merge (branch|tag|remote-tracking branch|pull request)", msg, re.I):
-                    continue
-                
-                committer_login = (c.get("committer") or {}).get("login", "").lower()
-                committer_name = c.get("commit", {}).get("committer", {}).get("name", "").lower()
-                author_login = (c.get("author") or {}).get("login", "").lower()
-                author_name = c.get("commit", {}).get("author", {}).get("name", "").lower()
-                
-                if any(target_user in x for x in [committer_login, committer_name, author_login, author_name]):
-                    date_raw = c.get("commit", {}).get("committer", {}).get("date") or c.get("commit", {}).get("author", {}).get("date") or ""
-                    date_display = date_raw[:10] if date_raw else "Unknown"
-                    if not latest_ts and date_raw:
-                        latest_ts = date_raw
-                    repo_commits.append(f"- [{date_display}] {msg}")
-            
-            if repo_commits:
-                all_projects.append({
-                    "name": f"{org_name}/{repo_name}",
-                    "latest_ts": latest_ts or "0000",
-                    "commits": repo_commits
-                })
-        except Exception:
-            pass
-
-# Fetch upstream commits from LineageOS Gerrit (up to 500 changes)
-gerrit_url = f"https://review.lineageos.org/changes/?q=status:merged+branch:{branch}+-project:^.*_device_.*+-project:^.*mainline.*+(-project:^.*_kernel_.*+OR+project:^.*android_kernel_qcom_sm8350.*)+(-project:^.*android_hardware_.*+OR+project:^.*android_hardware_xiaomi.*)&n=500"
-
-try:
-    req = urllib.request.Request(gerrit_url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        content = resp.read().decode("utf-8")
-        if content.startswith(")]}'"):
-            content = content[4:].lstrip()
-        gerrit_data = json.loads(content)
-        
-        by_project = {}
-        for item in gerrit_data:
-            proj = item.get("project", "Unknown")
-            by_project.setdefault(proj, []).append(item)
-            
-        for proj, items in by_project.items():
-            proj_commits = []
-            latest_ts = ""
-            for it in items:
-                sub = it.get("subject", "")
-                submitted = it.get("submitted") or it.get("updated") or ""
-                date_display = submitted[:10] if submitted else "Unknown"
-                if not latest_ts and submitted:
-                    latest_ts = submitted
-                proj_commits.append(f"- [{date_display}] {sub}")
-            
-            if proj_commits:
-                all_projects.append({
-                    "name": proj,
-                    "latest_ts": latest_ts or "0000",
-                    "commits": proj_commits
-                })
-except Exception:
-    pass
-
-# Sort all projects across all orgs by newest commit timestamp descending
-all_projects.sort(key=lambda p: p["latest_ts"], reverse=True)
-
-if all_projects:
-    with open("source_changelog.txt", "a", encoding="utf-8") as out:
-        for p in all_projects:
-            out.write(f"### {p['name']}\n")
-            for c in p["commits"]:
-                out.write(f"{c}\n")
-            out.write("\n")
-EOF
-
-        if [ -s source_changelog.txt ]; then
-            echo "✅ Changelog saved to source_changelog.txt"
-            FILES_TO_UPLOAD+=("source_changelog.txt")
-        else
-            echo "⚠️ Failed to generate changelog or empty."
-        fi
-    else
-        echo "ℹ️ Skipping Changelog generation (Not LineageOS on stone/spes)"
-    fi
-}
-
-upload_and_notify() {
-    echo "------------------------------------------"
-    SERVER=$(curl -s --connect-timeout 5 https://api.gofile.io/servers | jq -r '.data.servers[0].name' 2>/dev/null || true)
-    USE_PIXELDRAIN=false
-    PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
-
-    if [ -z "$SERVER" ] || [ "$SERVER" == "null" ]; then
-        echo "⚠️ Failed to fetch a Gofile server. API might be down. Falling back to Pixeldrain..."
-        USE_PIXELDRAIN=true
-    else
-        echo "☁️ Uploading to Gofile Server: $SERVER"
-    fi
-    echo "------------------------------------------"
-
-    MASTER_LINK=""
-    GUEST_TOKEN=""
-    FOLDER_ID=""
-    UPLOADED_IDS=()
-
-    if [ "$USE_PIXELDRAIN" == "true" ]; then
-        echo "⚡ Uploading ${#FILES_TO_UPLOAD[@]} file(s) in parallel to Pixeldrain..."
-        TMP_DIR=$(mktemp -d)
-
-        for i in "${!FILES_TO_UPLOAD[@]}"; do
-            (
-                FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-                UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
-                    -u ":$PIXELDRAIN_API_KEY" \
-                    -F "file=@${FILE_PATH}" \
-                    "https://pixeldrain.com/api/file" || true)
-                echo "$UPLOAD_RES" > "$TMP_DIR/res_$i.json"
-            ) &
-        done
-        wait
-
-        for i in "${!FILES_TO_UPLOAD[@]}"; do
-            FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-            FILE_NAME=$(basename "$FILE_PATH")
-            UPLOAD_RES=$(cat "$TMP_DIR/res_$i.json" 2>/dev/null || true)
-            SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
-
-            if [ "$SUCCESS" == "true" ]; then
-                FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
-                UPLOADED_IDS+=("$FILE_ID")
-                echo "✅ Uploaded $FILE_NAME! ID: $FILE_ID"
-            else
-                echo "❌ Failed to upload $FILE_NAME to Pixeldrain"
-                echo "Response: $UPLOAD_RES"
-                rm -rf "$TMP_DIR"
-                handle_error $LINENO
-            fi
-        done
-        rm -rf "$TMP_DIR"
-
-    else
-        # Upload initial file to Gofile synchronously to establish folder & token
-        FIRST_FILE="${FILES_TO_UPLOAD[0]}"
-        FIRST_NAME=$(basename "$FIRST_FILE")
-        echo "⬆️ Uploading $FIRST_NAME (initial file)..."
-
-        UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
-            -F "file=@${FIRST_FILE}" \
-            "https://${SERVER}.gofile.io/contents/uploadfile" || true)
-
-        STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
-
-        if [ "$STATUS" == "ok" ]; then
-            echo "✅ Uploaded $FIRST_NAME!"
-            MASTER_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
-            GUEST_TOKEN=$(echo "$UPLOAD_RES" | jq -r '.data.guestToken' 2>/dev/null || true)
-            FOLDER_ID=$(echo "$UPLOAD_RES" | jq -r '.data.parentFolder' 2>/dev/null || true)
-            echo "📁 Folder created! Grouping remaining files..."
-        else
-            echo "⚠️ Gofile upload failed for $FIRST_NAME. Switching to Pixeldrain fallback..."
-            USE_PIXELDRAIN=true
-        fi
-
-        # Upload remaining files in parallel to Gofile
-        if [ "$USE_PIXELDRAIN" == "false" ] && [ ${#FILES_TO_UPLOAD[@]} -gt 1 ]; then
-            echo "⚡ Uploading remaining $((${#FILES_TO_UPLOAD[@]} - 1)) file(s) in parallel to Gofile..."
-            TMP_DIR=$(mktemp -d)
-
-            for i in $(seq 1 $((${#FILES_TO_UPLOAD[@]} - 1))); do
-                (
-                    FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-                    UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
-                        -F "token=$GUEST_TOKEN" \
-                        -F "folderId=$FOLDER_ID" \
-                        -F "file=@${FILE_PATH}" \
-                        "https://${SERVER}.gofile.io/contents/uploadfile" || true)
-                    echo "$UPLOAD_RES" > "$TMP_DIR/res_$i.json"
-                ) &
-            done
-            wait
-
-            for i in $(seq 1 $((${#FILES_TO_UPLOAD[@]} - 1))); do
-                FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-                FILE_NAME=$(basename "$FILE_PATH")
-                UPLOAD_RES=$(cat "$TMP_DIR/res_$i.json" 2>/dev/null || true)
-                STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
-
-                if [ "$STATUS" == "ok" ]; then
-                    echo "✅ Uploaded $FILE_NAME!"
-                else
-                    echo "⚠️ Gofile parallel upload failed for $FILE_NAME. Switching to Pixeldrain fallback..."
-                    USE_PIXELDRAIN=true
-                    break
-                fi
-            done
-            rm -rf "$TMP_DIR"
-        fi
-
-        # If Gofile failed at any step, fallback to parallel Pixeldrain upload
-        if [ "$USE_PIXELDRAIN" == "true" ]; then
-            echo "⚡ Re-uploading all ${#FILES_TO_UPLOAD[@]} file(s) in parallel to Pixeldrain..."
-            TMP_DIR=$(mktemp -d)
-            UPLOADED_IDS=()
-
-            for i in "${!FILES_TO_UPLOAD[@]}"; do
-                (
-                    FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-                    UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
-                        -u ":$PIXELDRAIN_API_KEY" \
-                        -F "file=@${FILE_PATH}" \
-                        "https://pixeldrain.com/api/file" || true)
-                    echo "$UPLOAD_RES" > "$TMP_DIR/res_$i.json"
-                ) &
-            done
-            wait
-
-            for i in "${!FILES_TO_UPLOAD[@]}"; do
-                FILE_PATH="${FILES_TO_UPLOAD[$i]}"
-                FILE_NAME=$(basename "$FILE_PATH")
-                UPLOAD_RES=$(cat "$TMP_DIR/res_$i.json" 2>/dev/null || true)
-                SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
-
-                if [ "$SUCCESS" == "true" ]; then
-                    FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
-                    UPLOADED_IDS+=("$FILE_ID")
-                    echo "✅ Uploaded $FILE_NAME! ID: $FILE_ID"
-                else
-                    echo "❌ Failed to upload $FILE_NAME to Pixeldrain as well."
-                    echo "Response: $UPLOAD_RES"
-                    rm -rf "$TMP_DIR"
-                    handle_error $LINENO
-                fi
-            done
-            rm -rf "$TMP_DIR"
-        fi
-    fi
-
-    if [ "$USE_PIXELDRAIN" == "true" ] && [ ${#UPLOADED_IDS[@]} -gt 0 ]; then
-        echo "📁 Creating Pixeldrain List (Folder)..."
-        
-        FILES_JSON="["
-        for i in "${!UPLOADED_IDS[@]}"; do
-            FILES_JSON+="{\"id\":\"${UPLOADED_IDS[$i]}\", \"description\":\"\"}"
-            if [ $i -lt $((${#UPLOADED_IDS[@]} - 1)) ]; then
-                FILES_JSON+=","
-            fi
-        done
-        FILES_JSON+="]"
-
-        LIST_RES=$(curl -s -X POST -u ":$PIXELDRAIN_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"title\": \"$ROM_NAME Update\", \"files\": $FILES_JSON}" \
-            "https://pixeldrain.com/api/list" || true)
-
-        LIST_SUCCESS=$(echo "$LIST_RES" | jq -r '.success' 2>/dev/null || true)
-        
-        if [ "$LIST_SUCCESS" == "true" ]; then
-            LIST_ID=$(echo "$LIST_RES" | jq -r '.id' 2>/dev/null || true)
-            MASTER_LINK="https://pixeldrain.com/l/$LIST_ID"
-            echo "✅ Folder created successfully!"
-        else
-            echo "⚠️ Failed to create folder list. Fallback to single file link."
-            MASTER_LINK="https://pixeldrain.com/u/${UPLOADED_IDS[0]}"
-        fi
-    fi
-
-    echo "🎉 Main uploads complete for $ROM_NAME!"
-    echo "🔗 Master Link: $MASTER_LINK"
-
-    # ==========================================
-    # 🚀 SEND SUCCESS NOTIFICATION
-    # ==========================================
-    if [ -n "$MASTER_LINK" ]; then
-        echo "📱 Sending 'Build Success' notification..."
-
-        SUCCESS_MSG="🚀 <b>BUILD SUCCESSFUL</b>%0A%0A"
-        SUCCESS_MSG+="<blockquote>• <b>Device:</b> ${DEVICE_NAME}%0A"
-        SUCCESS_MSG+="• <b>ROM:</b> ${ROM_NAME}%0A"
-        SUCCESS_MSG+="• <b>Android:</b> ${ANDROID_VERSION}%0A"
-        SUCCESS_MSG+="• <b>Time:</b> ${DISPLAY_TIME}%0A"
-        if [ -n "$ROM_SIZE_HUMAN" ] && [ "$ROM_SIZE_HUMAN" != "Unknown" ]; then
-            SUCCESS_MSG+="• <b>Size:</b> ${ROM_SIZE_HUMAN}%0A"
-        fi
-        if [ -n "$ROM_MD5" ] && [ "$ROM_MD5" != "Unknown" ]; then
-            SUCCESS_MSG+="• <b>MD5:</b> <code>${ROM_MD5}</code>%0A"
-        fi
-
-        PROVIDER_NAME="Gofile"
-        if [ "$USE_PIXELDRAIN" == "true" ] || [[ "$MASTER_LINK" == *"pixeldrain"* ]]; then
-            PROVIDER_NAME="Pixeldrain"
-        fi
-
-        if [ -s source_changelog.txt ]; then
-            CHANGELOG_URL=""
-            
-            # Upload changelog (Catbox -> paste.c-net.org -> Pixeldrain fallback)
-            RES=$(curl -s --max-time 15 -F "reqtype=fileupload" -F "fileToUpload=@source_changelog.txt" https://catbox.moe/user/api.php | tr -d '\r\n' || true)
-            if [[ "$RES" == http* ]]; then
-                CHANGELOG_URL="$RES"
-            else
-                RES=$(curl -s --max-time 15 --data-binary @source_changelog.txt https://paste.c-net.org/ | tr -d '\r\n' || true)
-                if [[ "$RES" == http* ]]; then
-                    CHANGELOG_URL="$RES"
-                else
-                    PIXELDRAIN_API_KEY="89f5f646-bd8e-4210-826e-33f69930e0f7"
-                    RES=$(curl -s --max-time 15 -u ":$PIXELDRAIN_API_KEY" -F "file=@source_changelog.txt" https://pixeldrain.com/api/file || true)
-                    FILE_ID=$(echo "$RES" | jq -r '.id' 2>/dev/null || echo "$RES" | grep -o '"id":"[^"]*' | cut -d'"' -f4 || true)
-                    if [ -n "$FILE_ID" ] && [ "$FILE_ID" != "null" ]; then
-                        CHANGELOG_URL="https://pixeldrain.com/u/$FILE_ID"
-                    fi
-                fi
-            fi
-
-            if [ -n "$CHANGELOG_URL" ]; then
-                SUCCESS_MSG+="• <b>Changelog:</b> <a href=\"${CHANGELOG_URL}\">View Latest Changes</a>%0A"
-            fi
-        fi
-
-        SUCCESS_MSG+="• <b>Download:</b> <a href=\"${MASTER_LINK}\">Download on ${PROVIDER_NAME}</a></blockquote>"
-
-        send_tg_msg "$SUCCESS_MSG"
-        echo "✅ Notification sent!"
-    fi
-    echo "=========================================="
-}
-
-# ==========================================
-# 🚀 MAIN EXECUTION PIPELINE
-# ==========================================
-send_start_notification
+# ============================================================
+# Main Execution Pipeline
+# ============================================================
 sync_repositories
 compile_rom
 process_artifacts
 
-# ==========================================
-# 🗜️ Finalize Logs & Upload
-# ==========================================
-# Restore original stdout/stderr (this gracefully terminates the background tee logger)
 exec 1>&3 2>&4
-sleep 1 # Flush buffers
+sleep 1
 
-if [ -f "$LOG_FILE" ] && command -v gzip &> /dev/null; then
-    echo "=========================================="
-    echo "🗜️ Compressing full execution log..."
-    gzip -9 "$LOG_FILE"
-    LOG_FILE="${LOG_FILE}.gz"
-fi
-
-# Append the compressed log file to the upload payload
-FILES_TO_UPLOAD+=("$LOG_FILE")
-
-upload_and_notify
-
-# Clean up log file to save space
-if [ -f "$LOG_FILE" ]; then
-    echo "🧹 Deleting log file $LOG_FILE to save space..."
-    rm -f "$LOG_FILE"
-fi
+echo "============================================================"
+echo "[SUCCESS] Build pipeline completed successfully"
+echo "============================================================"
+echo "Device:       ${DEVICE_NAME}"
+echo "ROM:          ${ROM_NAME} (${ANDROID_VERSION})"
+echo "Duration:     ${DISPLAY_TIME}"
+echo "Package:      ${ROM_ZIP}"
+echo "Size:         ${ROM_SIZE_HUMAN}"
+echo "SHA256:       ${ROM_SHA256}"
+echo "MD5:          ${ROM_MD5}"
+echo "Log:          ${LOG_FILE}"
+echo "============================================================"
