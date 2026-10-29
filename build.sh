@@ -6,6 +6,11 @@
 # Maintainer: @Parvez52
 # ============================================================
 
+# Ensure working directory is android root if executed inside Crave
+if [ -d "/tmp/src/android" ] && [ "$PWD" != "/tmp/src/android" ]; then
+    cd /tmp/src/android
+fi
+
 DEVICE=${1:-"stone"}
 START_TIME=$(date +%s)
 LOG_FILE="build_${DEVICE}_$(date +%Y%m%d_%H%M).log"
@@ -17,7 +22,7 @@ export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
 if [ -d "/opt/crave" ]; then
     export BUILD_HOSTNAME="crave"
 else
-    export BUILD_HOSTNAME=$(hostname)
+    export BUILD_HOSTNAME="$(hostname)"
 fi
 
 # ============================================================
@@ -74,6 +79,26 @@ handle_error() {
 
 trap 'handle_error $LINENO' ERR
 
+# Ensure basic utilities are installed early
+install_prerequisites() {
+    if command -v apt-get &>/dev/null; then
+        local NEEDED_PKGS=""
+        for pkg in jq unzip curl wget; do
+            if ! command -v "$pkg" &>/dev/null; then
+                NEEDED_PKGS="$NEEDED_PKGS $pkg"
+            fi
+        done
+        if [ -n "$NEEDED_PKGS" ]; then
+            echo "[INFO] Installing prerequisite packages: $NEEDED_PKGS"
+            if [ "$(id -u)" -eq 0 ]; then
+                apt-get update -qq >/dev/null 2>&1 && apt-get install -y $NEEDED_PKGS >/dev/null 2>&1 || true
+            elif command -v sudo &>/dev/null; then
+                sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y $NEEDED_PKGS >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+}
+
 # ============================================================
 # Target Configuration
 # ============================================================
@@ -91,8 +116,8 @@ REPO_INIT_URL="https://github.com/Lunaris-AOSP/android"
 REPO_INIT_BRANCH="16.2"
 LOCAL_MANIFEST_URL="${LOCAL_MANIFEST_URL:-https://github.com/frnAlt/local_manifests-1.git}"
 LOCAL_MANIFEST_BRANCH="lunaris"
-BUILD_TARGET="lineage_stone-bp2a-userdebug"
-BUILD_COMMAND="m lunaris"
+BUILD_TARGET="lineage_${DEVICE}-bp4a-userdebug"
+BUILD_COMMAND="m bacon"
 
 echo "[INFO] Selected Device:  ${DEVICE_NAME}"
 echo "[INFO] Selected ROM:     ${ROM_NAME}"
@@ -104,9 +129,53 @@ echo "[INFO] Build Command:    ${BUILD_COMMAND}"
 echo "[INFO] Build Hostname:   ${BUILD_HOSTNAME}"
 
 # ============================================================
+# Automated In-Flight Patching & Workspace Sanitization
+# ============================================================
+auto_patch_manifests() {
+    echo "[INFO] Checking and auto-patching local manifests..."
+    if [ -d ".repo/local_manifests" ]; then
+        for xml_file in .repo/local_manifests/*.xml; do
+            [ -f "$xml_file" ] || continue
+
+            # Fix 1: Auto-remove duplicate vendor/lunaris-priv/keys if present
+            # Prevents duplicate Soong module collision (com.android.*.certificate.override)
+            if grep -q "vendor/lunaris-priv/keys" "$xml_file"; then
+                echo "[AUTO-FIX] Removing conflicting 'vendor/lunaris-priv/keys' entry from $xml_file"
+                sed -i '/vendor\/lunaris-priv\/keys/d' "$xml_file"
+            fi
+
+            # Fix 2: Auto-update renamed ViPER4AndroidFX repo to eliminate HTTP 301
+            if grep -q "packages_apps_ViPER4AndroidFX" "$xml_file"; then
+                echo "[AUTO-FIX] Updating ViPER4AndroidFX repo target in $xml_file"
+                sed -i 's/name="packages_apps_ViPER4AndroidFX"/name="vendor_viper4"/g' "$xml_file"
+            fi
+        done
+    fi
+}
+
+auto_clean_workspace() {
+    echo "[INFO] Sanitizing Crave workspace for clean compilation..."
+
+    # Fix 3: Prune stale vendor/lunaris-priv directory from persistent Crave cache
+    if [ -d "vendor/lunaris-priv" ]; then
+        echo "[AUTO-FIX] Removing stale conflicting directory: vendor/lunaris-priv"
+        rm -rf "vendor/lunaris-priv"
+    fi
+    rm -rf .repo/projects/vendor/lunaris-priv* 2>/dev/null || true
+
+    # Fix 4: Clear stale git lock files from aborted runs
+    find .repo/ -name "*.lock" -type f -delete 2>/dev/null || true
+
+    # Fix 5: Invalidate previous corrupted Soong ninja files
+    rm -f out/soong/build.*.ninja out/.module_paths/Android.bp.list 2>/dev/null || true
+}
+
+# ============================================================
 # Repository Synchronization
 # ============================================================
 sync_repositories() {
+    install_prerequisites
+
     echo "============================================================"
     echo "[INFO] Initializing Lunaris AOSP repository: ${REPO_INIT_URL} (${REPO_INIT_BRANCH})"
     echo "============================================================"
@@ -116,6 +185,9 @@ sync_repositories() {
     rm -rf .repo/local_manifests/
     echo "[INFO] Fetching local manifests from branch: ${LOCAL_MANIFEST_BRANCH}"
     git clone --depth=1 -b "$LOCAL_MANIFEST_BRANCH" "$LOCAL_MANIFEST_URL" .repo/local_manifests
+
+    # Apply in-flight manifest patches BEFORE sync
+    auto_patch_manifests
 
     if [ -f /opt/crave/resync.sh ]; then
         echo "[INFO] Executing Crave resync routine..."
@@ -134,6 +206,9 @@ sync_repositories() {
         done
     fi
 
+    # Clean up workspace after sync to remove leftover directories
+    auto_clean_workspace
+
     # Setup Clang r614150 Toolchain for stone
     CLANG_TARGET_DIR="prebuilts/clang/host/linux-x86/clang-r614150"
     if [ ! -d "$CLANG_TARGET_DIR" ] || [ ! -x "$CLANG_TARGET_DIR/bin/clang" ]; then
@@ -142,7 +217,12 @@ sync_repositories() {
         mkdir -p "$CLANG_TARGET_DIR"
 
         CLANG_URL="https://github.com/bachnxuan/aosp_clang_mirror/releases/download/clang-r614150-16165221/clang-r614150.tar.gz"
-        wget -q "$CLANG_URL" -O /tmp/clang-download.tar.gz
+        echo "[INFO] Downloading Clang r614150..."
+        if ! curl -fSL "$CLANG_URL" -o /tmp/clang-download.tar.gz; then
+            echo "[WARN] Curl download failed, falling back to wget..."
+            wget -c "$CLANG_URL" -O /tmp/clang-download.tar.gz
+        fi
+
         tar -xf /tmp/clang-download.tar.gz -C "$CLANG_TARGET_DIR"
         rm -f /tmp/clang-download.tar.gz
 
@@ -159,12 +239,11 @@ sync_repositories() {
         chmod -R +x "$CLANG_TARGET_DIR/bin" 2>/dev/null || true
 
         if [ -x "$CLANG_TARGET_DIR/bin/clang" ]; then
-            set +eE
             CLANG_VER=$("$CLANG_TARGET_DIR/bin/clang" --version 2>/dev/null | head -n 1 || echo "r614150")
-            set -eE
             echo "[INFO] Clang configured: ${CLANG_VER}"
         else
-            echo "[WARN] Clang binary missing at ${CLANG_TARGET_DIR}/bin/clang after extraction."
+            echo "[ERROR] Clang binary missing at ${CLANG_TARGET_DIR}/bin/clang after extraction."
+            handle_error $LINENO
         fi
     else
         echo "[INFO] Clang r614150 toolchain verified."
@@ -177,9 +256,25 @@ sync_repositories() {
 compile_rom() {
     export TZ="Asia/Kolkata"
 
+    # Maintain consistent build user and hostname across subshells
+    export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
+    if [ -d "/opt/crave" ]; then
+        export BUILD_HOSTNAME="crave"
+    else
+        export BUILD_HOSTNAME="$(hostname)"
+    fi
+
     set +eE
     source build/envsetup.sh
-    lunch "$BUILD_TARGET" || lunch "${BUILD_TARGET/-bp2a/}" || lunch "lineage_${DEVICE}-userdebug"
+
+    export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
+    export BUILD_HOSTNAME="${BUILD_HOSTNAME}"
+
+    echo "[INFO] Selecting lunch target..."
+    lunch "$BUILD_TARGET" || lunch "lineage_${DEVICE}-userdebug" || {
+        echo "[ERROR] Lunch target selection failed."
+        handle_error $LINENO
+    }
     set -eE
 
     echo "[INFO] Cleaning target build environment..."
@@ -213,12 +308,8 @@ process_artifacts() {
     echo "[INFO] Inspecting build artifacts..."
     echo "============================================================"
 
-    if ! command -v jq &> /dev/null; then
-        sudo apt-get install -y jq > /dev/null 2>&1 || true
-    fi
-
     TARGET_DIR="out/target/product/${DEVICE}"
-    ROM_ZIP=$(ls -t ${TARGET_DIR}/*${DEVICE}*.zip 2>/dev/null | head -n 1 || true)
+    ROM_ZIP=$(ls -t ${TARGET_DIR}/Lunaris*${DEVICE}*.zip ${TARGET_DIR}/lineage*${DEVICE}*.zip ${TARGET_DIR}/*${DEVICE}*.zip 2>/dev/null | grep -v "target_files" | grep -v "ota" | head -n 1 || true)
 
     if [ -z "$ROM_ZIP" ] || [ ! -f "$ROM_ZIP" ]; then
         echo "[ERROR] ROM package not found in ${TARGET_DIR}."
@@ -235,9 +326,11 @@ process_artifacts() {
     REL_TAG=$(date +%y%m%d)
 
     EXTRACT_DIR=$(mktemp -d)
-    unzip -p "$ROM_ZIP" META-INF/com/android/metadata > "$EXTRACT_DIR/metadata.txt" 2>/dev/null || true
+    if command -v unzip &>/dev/null; then
+        unzip -p "$ROM_ZIP" META-INF/com/android/metadata > "$EXTRACT_DIR/metadata.txt" 2>/dev/null || true
+    fi
     
-    if grep -q "post-timestamp=" "$EXTRACT_DIR/metadata.txt" 2>/dev/null; then
+    if [ -s "$EXTRACT_DIR/metadata.txt" ] && grep -q "post-timestamp=" "$EXTRACT_DIR/metadata.txt" 2>/dev/null; then
         BUILD_DATETIME=$(grep "post-timestamp=" "$EXTRACT_DIR/metadata.txt" | cut -d= -f2 | tr -d '\r')
         echo "[INFO] Extracted build timestamp: ${BUILD_DATETIME}"
     else
@@ -253,33 +346,56 @@ process_artifacts() {
     GH_DOWNLOAD_URL="https://github.com/${GH_REPO}/releases/download/${REL_TAG}/${FILE_NAME}"
     JSON_FILE="${TARGET_DIR}/${DEVICE}.json"
 
-    jq -n \
-      --arg dt "$BUILD_DATETIME" \
-      --arg fn "$FILE_NAME" \
-      --arg id "$FILE_HASH" \
-      --arg md5 "$FILE_MD5" \
-      --arg sz "$FILE_SIZE" \
-      --arg url "$GH_DOWNLOAD_URL" \
-      --arg ver "$ROM_VERSION" \
-      --arg dev "$DEVICE" \
-      '{
-        response: [
-          {
-            maintainer: "@Parvez52",
-            currently_maintained: true,
-            oem: "Xiaomi",
-            device: $dev,
-            filename: $fn,
-            download: $url,
-            timestamp: ($dt | tonumber),
-            md5: $md5,
-            sha256: $id,
-            size: ($sz | tonumber),
-            version: $ver,
-            buildtype: "UNOFFICIAL"
-          }
-        ]
-      }' > "$JSON_FILE"
+    if command -v jq &>/dev/null; then
+        jq -n \
+          --arg dt "$BUILD_DATETIME" \
+          --arg fn "$FILE_NAME" \
+          --arg id "$FILE_HASH" \
+          --arg md5 "$FILE_MD5" \
+          --arg sz "$FILE_SIZE" \
+          --arg url "$GH_DOWNLOAD_URL" \
+          --arg ver "$ROM_VERSION" \
+          --arg dev "$DEVICE" \
+          '{
+            response: [
+              {
+                maintainer: "@Parvez52",
+                currently_maintained: true,
+                oem: "Xiaomi",
+                device: $dev,
+                filename: $fn,
+                download: $url,
+                timestamp: ($dt | tonumber),
+                md5: $md5,
+                sha256: $id,
+                size: ($sz | tonumber),
+                version: $ver,
+                buildtype: "UNOFFICIAL"
+              }
+            ]
+          }' > "$JSON_FILE"
+    else
+        cat <<JSON_EOF > "$JSON_FILE"
+{
+  "response": [
+    {
+      "maintainer": "@Parvez52",
+      "currently_maintained": true,
+      "oem": "Xiaomi",
+      "device": "${DEVICE}",
+      "filename": "${FILE_NAME}",
+      "download": "${GH_DOWNLOAD_URL}",
+      "timestamp": ${BUILD_DATETIME},
+      "md5": "${FILE_MD5}",
+      "sha256": "${FILE_HASH}",
+      "size": ${FILE_SIZE},
+      "version": "${ROM_VERSION}",
+      "buildtype": "UNOFFICIAL"
+    }
+  ]
+}
+JSON_EOF
+    fi
 
     echo "[INFO] Generated ${JSON_FILE}"
 
