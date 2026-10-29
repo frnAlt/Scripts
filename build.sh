@@ -83,7 +83,7 @@ trap 'handle_error $LINENO' ERR
 install_prerequisites() {
     if command -v apt-get &>/dev/null; then
         local NEEDED_PKGS=""
-        for pkg in jq unzip curl wget; do
+        for pkg in jq unzip curl wget ccache; do
             if ! command -v "$pkg" &>/dev/null; then
                 NEEDED_PKGS="$NEEDED_PKGS $pkg"
             fi
@@ -168,6 +168,19 @@ auto_clean_workspace() {
 
     # Fix 5: Invalidate previous corrupted Soong ninja files
     rm -f out/soong/build.*.ninja out/.module_paths/Android.bp.list 2>/dev/null || true
+
+    # Fix 6: Remove stale ViPER4AndroidFX project git dir to avoid hook discrepancy
+    if [ -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
+        rm -rf ".repo/projects/packages/apps/ViPER4AndroidFX.git"
+    fi
+
+    # Fix 7: Auto-sanitize device.mk to remove non-existent DolbyAtmos
+    if [ -f "device/xiaomi/stone/device.mk" ]; then
+        if grep -q "DolbyAtmos" "device/xiaomi/stone/device.mk"; then
+            echo "[AUTO-FIX] Sanitizing device/xiaomi/stone/device.mk (removing non-existent DolbyAtmos)..."
+            sed -i "/# Dolby/,/DolbyAtmos/c\# Dolby\n\$(call inherit-product-if-exists, hardware/dolby/dolby.mk)" "device/xiaomi/stone/device.mk"
+        fi
+    fi
 }
 
 # ============================================================
@@ -179,6 +192,19 @@ sync_repositories() {
     echo "============================================================"
     echo "[INFO] Initializing Lunaris AOSP repository: ${REPO_INIT_URL} (${REPO_INIT_BRANCH})"
     echo "============================================================"
+
+    # Reset any unstaged working tree changes to prevent rebase errors
+    git reset --hard HEAD 2>/dev/null || true
+    git clean -fd 2>/dev/null || true
+    if [ -d ".repo/manifests" ]; then
+        git -C .repo/manifests reset --hard HEAD 2>/dev/null || true
+        git -C .repo/manifests clean -fd 2>/dev/null || true
+    fi
+
+    # Prune stale ViPER repo project git before sync to avoid hook conflict
+    if [ -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
+        rm -rf ".repo/projects/packages/apps/ViPER4AndroidFX.git"
+    fi
 
     repo init -u "$REPO_INIT_URL" -b "$REPO_INIT_BRANCH" --git-lfs --depth=1
 
@@ -262,6 +288,15 @@ compile_rom() {
         export BUILD_HOSTNAME="crave"
     else
         export BUILD_HOSTNAME="$(hostname)"
+    fi
+
+    # Configure Ccache if installed
+    if command -v ccache &>/dev/null; then
+        export USE_CCACHE=1
+        export CCACHE_EXEC="$(command -v ccache)"
+        export CCACHE_DIR="${CCACHE_DIR:-/tmp/src/android/.ccache}"
+        ccache -M 50G >/dev/null 2>&1 || true
+        echo "[INFO] Ccache enabled (${CCACHE_DIR})"
     fi
 
     set +eE
