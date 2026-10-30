@@ -35,7 +35,7 @@ set -eE
 set -o pipefail
 
 # ============================================================
-# Signal & Error Handling
+# Signal & Error Handling (Upload Crash Logs to Gofile/Pixeldrain)
 # ============================================================
 handle_error() {
     trap - ERR
@@ -51,26 +51,101 @@ handle_error() {
     fi
     touch "/tmp/build_failed.lock"
 
+    echo "============================================================"
+    echo "❌ [ERROR] Build failed on line ${FAILED_LINE}"
+    echo "❌ [ERROR] Device:  ${DEVICE_NAME:-${DEVICE}}"
+    echo "❌ [ERROR] ROM:     ${ROM_NAME:-Lunaris OS}"
+
     local END_TIME=$(date +%s)
     local ELAPSED_SECONDS=$((END_TIME - START_TIME))
     local ELAPSED_MINUTES=$((ELAPSED_SECONDS / 60))
     local REM_SECONDS=$((ELAPSED_SECONDS % 60))
+    echo "❌ [ERROR] Elapsed: ${ELAPSED_MINUTES}m ${REM_SECONDS}s"
 
-    echo "============================================================"
-    echo "[ERROR] Build failed on line ${FAILED_LINE}"
-    echo "[ERROR] Device:  ${DEVICE_NAME:-${DEVICE}}"
-    echo "[ERROR] ROM:     ${ROM_NAME:-Lunaris OS}"
-    echo "[ERROR] Elapsed: ${ELAPSED_MINUTES}m ${REM_SECONDS}s"
-    if [ -f "$LOG_FILE" ]; then
-        echo "[ERROR] Log:     ${LOG_FILE}"
+    local LOG_LINK=""
+    local SISO_LINK=""
+
+    # Ensure jq is available
+    if ! command -v jq &>/dev/null && command -v apt-get &>/dev/null; then
+        if [ "$(id -u)" -eq 0 ]; then
+            apt-get install -y jq >/dev/null 2>&1 || true
+        elif command -v sudo &>/dev/null; then
+            sudo apt-get install -y jq >/dev/null 2>&1 || true
+        fi
     fi
 
+    local SERVER=""
+    if command -v jq &>/dev/null; then
+        SERVER=$(curl -s --connect-timeout 5 https://api.gofile.io/servers | jq -r '.data.servers[0].name' 2>/dev/null || true)
+    fi
+
+    # Compress and upload error log
+    if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+        if command -v gzip &>/dev/null && [[ "$LOG_FILE" != *.gz ]]; then
+            echo "[INFO] Compressing crash log..."
+            gzip -9 "$LOG_FILE"
+            LOG_FILE="${LOG_FILE}.gz"
+        fi
+        echo "[INFO] Attempting to upload error log to Gofile..."
+
+        local UPLOADED_TO_GOFILE="false"
+        if [ -n "$SERVER" ] && [ "$SERVER" != "null" ]; then
+            local UPLOAD_RES=$(curl -s -F "file=@${LOG_FILE}" "https://${SERVER}.gofile.io/contents/uploadfile" || true)
+            local STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
+            if [ "$STATUS" == "ok" ]; then
+                LOG_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
+                echo "✅ [INFO] Error log uploaded successfully to Gofile: $LOG_LINK"
+                UPLOADED_TO_GOFILE="true"
+            fi
+        fi
+
+        if [ "$UPLOADED_TO_GOFILE" == "false" ]; then
+            echo "[WARN] Gofile upload failed. Falling back to Pixeldrain for error log..."
+            local PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
+            local UPLOAD_RES=$(curl -s -u ":$PIXELDRAIN_API_KEY" -F "file=@${LOG_FILE}" "https://pixeldrain.com/api/file" || true)
+            local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
+            if [ "$SUCCESS" == "true" ]; then
+                local FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
+                LOG_LINK="https://pixeldrain.com/u/$FILE_ID"
+                echo "✅ [INFO] Error log uploaded successfully to Pixeldrain: $LOG_LINK"
+            fi
+        fi
+    fi
+
+    # Check for siso failed commands file (if Siso / ninja failed)
     local SISO_FAILED_FILE="./out/siso_failed_commands.sh"
     if [ ! -f "$SISO_FAILED_FILE" ] && [ -f "out/siso_failed_commands.sh" ]; then
         SISO_FAILED_FILE="out/siso_failed_commands.sh"
     fi
     if [ -f "$SISO_FAILED_FILE" ]; then
-        echo "[ERROR] Failed commands: ${SISO_FAILED_FILE}"
+        echo "[INFO] Uploading $SISO_FAILED_FILE to Gofile/Pixeldrain..."
+        if [ -n "$SERVER" ] && [ "$SERVER" != "null" ]; then
+            local UPLOAD_RES=$(curl -s -F "file=@${SISO_FAILED_FILE}" "https://${SERVER}.gofile.io/contents/uploadfile" || true)
+            local STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
+            if [ "$STATUS" == "ok" ]; then
+                SISO_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
+            fi
+        fi
+        if [ -z "$SISO_LINK" ]; then
+            local PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
+            local UPLOAD_RES=$(curl -s -u ":$PIXELDRAIN_API_KEY" -F "file=@${SISO_FAILED_FILE}" "https://pixeldrain.com/api/file" || true)
+            local SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
+            if [ "$SUCCESS" == "true" ]; then
+                local FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
+                SISO_LINK="https://pixeldrain.com/u/$FILE_ID"
+            fi
+        fi
+        if [ -n "$SISO_LINK" ]; then
+            echo "✅ [INFO] Failed commands uploaded: $SISO_LINK"
+        fi
+    fi
+
+    echo "============================================================"
+    if [ -n "$LOG_LINK" ]; then
+        echo "🔗 Crash Log Download: $LOG_LINK"
+    fi
+    if [ -n "$SISO_LINK" ]; then
+        echo "🔗 Failed Commands:   $SISO_LINK"
     fi
     echo "============================================================"
 
@@ -169,9 +244,10 @@ auto_clean_workspace() {
     # Fix 5: Invalidate previous corrupted Soong ninja files
     rm -f out/soong/build.*.ninja out/.module_paths/Android.bp.list 2>/dev/null || true
 
-    # Fix 6: Remove stale ViPER4AndroidFX project git dir to avoid hook discrepancy
-    if [ -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
-        rm -rf ".repo/projects/packages/apps/ViPER4AndroidFX.git"
+    # Fix 6: Safely reset ViPER4AndroidFX git tracking state if desynchronized
+    if [ -d "packages/apps/ViPER4AndroidFX" ] && [ ! -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
+        echo "[AUTO-FIX] Removing unlinked packages/apps/ViPER4AndroidFX directory..."
+        rm -rf "packages/apps/ViPER4AndroidFX"
     fi
 
     # Fix 7: Auto-sanitize device.mk to remove non-existent DolbyAtmos
@@ -179,6 +255,26 @@ auto_clean_workspace() {
         if grep -q "DolbyAtmos" "device/xiaomi/stone/device.mk"; then
             echo "[AUTO-FIX] Sanitizing device/xiaomi/stone/device.mk (removing non-existent DolbyAtmos)..."
             sed -i "/# Dolby/,/DolbyAtmos/c\# Dolby\n\$(call inherit-product-if-exists, hardware/dolby/dolby.mk)" "device/xiaomi/stone/device.mk"
+        fi
+    fi
+
+    # Fix 8: Auto-sanitize vendor/lineage/config/lunaris.mk to remove non-existent modules
+    # Prevents fatal Kati errors: "lineage_stone.mk includes non-existent modules in PRODUCT_PACKAGES"
+    if [ -f "vendor/lineage/config/lunaris.mk" ]; then
+        echo "[AUTO-FIX] Sanitizing vendor/lineage/config/lunaris.mk (removing non-existent packages)..."
+        # 1. Remove AppDataBackup (missing repository upstream in Lunaris-AOSP)
+        sed -i '/# Skip AppDataBackup on Pixel devices/,/endif/d' vendor/lineage/config/lunaris.mk
+        sed -i '/AppDataBackup/d' vendor/lineage/config/lunaris.mk
+
+        # 2. Remove LunarisLockStyles (missing LunarisClockMaker / LunarisLockscreenWidgets upstream dependencies)
+        sed -i '/LunarisLockStyles/d' vendor/lineage/config/lunaris.mk
+
+        # 3. Dynamically remove LunarisMonet and OptimizationEngine if not present in tree
+        if [ ! -d "packages/apps/LunarisMonet" ]; then
+            sed -i '/LunarisMonet/d' vendor/lineage/config/lunaris.mk
+        fi
+        if [ ! -d "packages/apps/OptimizationEngine" ]; then
+            sed -i '/OptimizationEngine/d' vendor/lineage/config/lunaris.mk
         fi
     fi
 }
@@ -201,9 +297,15 @@ sync_repositories() {
         git -C .repo/manifests clean -fd 2>/dev/null || true
     fi
 
-    # Prune stale ViPER repo project git before sync to avoid hook conflict
-    if [ -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
-        rm -rf ".repo/projects/packages/apps/ViPER4AndroidFX.git"
+    # Clean uncommitted working tree changes across cached repositories
+    if [ -d ".repo" ]; then
+        echo "[INFO] Cleaning uncommitted changes across cached repositories..."
+        repo forall -c "git reset --hard HEAD; git clean -fdx" 2>/dev/null || true
+    fi
+
+    # If ViPER working tree or git metadata is mismatched, clean both before repo sync
+    if [ -d "packages/apps/ViPER4AndroidFX" ] && [ ! -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
+        rm -rf "packages/apps/ViPER4AndroidFX"
     fi
 
     repo init -u "$REPO_INIT_URL" -b "$REPO_INIT_BRANCH" --git-lfs --depth=1
@@ -232,7 +334,7 @@ sync_repositories() {
         done
     fi
 
-    # Clean up workspace after sync to remove leftover directories
+    # Clean up and sanitize workspace after sync
     auto_clean_workspace
 
     # Setup Clang r614150 Toolchain for stone
@@ -305,7 +407,7 @@ compile_rom() {
     export BUILD_USERNAME="${BUILD_USERNAME:-frnAlt}"
     export BUILD_HOSTNAME="${BUILD_HOSTNAME}"
 
-    echo "[INFO] Selecting lunch target..."
+    echo "[INFO] Selecting lunch target: ${BUILD_TARGET}..."
     lunch "$BUILD_TARGET" || lunch "lineage_${DEVICE}-userdebug" || {
         echo "[ERROR] Lunch target selection failed."
         handle_error $LINENO
@@ -336,7 +438,7 @@ compile_rom() {
 }
 
 # ============================================================
-# Post-Build Artifact Processing
+# Post-Build Artifact Processing & Upload
 # ============================================================
 process_artifacts() {
     echo "============================================================"
@@ -345,12 +447,14 @@ process_artifacts() {
 
     TARGET_DIR="out/target/product/${DEVICE}"
     ROM_ZIP=$(ls -t ${TARGET_DIR}/Lunaris*${DEVICE}*.zip ${TARGET_DIR}/lineage*${DEVICE}*.zip ${TARGET_DIR}/*${DEVICE}*.zip 2>/dev/null | grep -v "target_files" | grep -v "ota" | head -n 1 || true)
+    FILES_TO_UPLOAD=()
 
     if [ -z "$ROM_ZIP" ] || [ ! -f "$ROM_ZIP" ]; then
         echo "[ERROR] ROM package not found in ${TARGET_DIR}."
         handle_error $LINENO
     fi
 
+    FILES_TO_UPLOAD+=("$ROM_ZIP")
     echo "[INFO] Found target ROM: $(basename "$ROM_ZIP")"
 
     ROM_SIZE_HUMAN=$(du -h "$ROM_ZIP" 2>/dev/null | awk '{print $1}' || echo "Unknown")
@@ -433,12 +537,156 @@ JSON_EOF
     fi
 
     echo "[INFO] Generated ${JSON_FILE}"
+    FILES_TO_UPLOAD+=("$JSON_FILE")
 
     for IMG in boot.img dtb.img dtbo.img vendor_boot.img; do
         if [ -f "${TARGET_DIR}/$IMG" ]; then
             echo "[INFO] Found kernel partition image: ${IMG}"
+            FILES_TO_UPLOAD+=("${TARGET_DIR}/$IMG")
         fi
     done
+}
+
+upload_and_notify() {
+    echo "============================================================"
+    echo "[INFO] Uploading build artifacts..."
+    echo "============================================================"
+
+    SERVER=$(curl -s --connect-timeout 5 https://api.gofile.io/servers | jq -r '.data.servers[0].name' 2>/dev/null || true)
+    USE_PIXELDRAIN=false
+    PIXELDRAIN_API_KEY="${PIXELDRAIN_API_KEY:-}"
+
+    if [ -z "$SERVER" ] || [ "$SERVER" == "null" ]; then
+        echo "[WARN] Gofile server unavailable. Falling back to Pixeldrain..."
+        USE_PIXELDRAIN=true
+    else
+        echo "[INFO] Uploading to Gofile Server: $SERVER"
+    fi
+
+    MASTER_LINK=""
+    GUEST_TOKEN=""
+    FOLDER_ID=""
+    UPLOADED_IDS=()
+
+    if [ "$USE_PIXELDRAIN" == "true" ]; then
+        echo "[INFO] Uploading ${#FILES_TO_UPLOAD[@]} file(s) in parallel to Pixeldrain..."
+        TMP_DIR=$(mktemp -d)
+
+        for i in "${!FILES_TO_UPLOAD[@]}"; do
+            (
+                FILE_PATH="${FILES_TO_UPLOAD[$i]}"
+                UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
+                    -u ":$PIXELDRAIN_API_KEY" \
+                    -F "file=@${FILE_PATH}" \
+                    "https://pixeldrain.com/api/file" || true)
+                echo "$UPLOAD_RES" > "$TMP_DIR/res_$i.json"
+            ) &
+        done
+        wait
+
+        for i in "${!FILES_TO_UPLOAD[@]}"; do
+            FILE_PATH="${FILES_TO_UPLOAD[$i]}"
+            FILE_NAME=$(basename "$FILE_PATH")
+            UPLOAD_RES=$(cat "$TMP_DIR/res_$i.json" 2>/dev/null || true)
+            SUCCESS=$(echo "$UPLOAD_RES" | jq -r '.success' 2>/dev/null || true)
+
+            if [ "$SUCCESS" == "true" ]; then
+                FILE_ID=$(echo "$UPLOAD_RES" | jq -r '.id' 2>/dev/null || true)
+                UPLOADED_IDS+=("$FILE_ID")
+                echo "✅ Uploaded $FILE_NAME! ID: $FILE_ID"
+            else
+                echo "❌ Failed to upload $FILE_NAME to Pixeldrain"
+            fi
+        done
+        rm -rf "$TMP_DIR"
+    else
+        FIRST_FILE="${FILES_TO_UPLOAD[0]}"
+        FIRST_NAME=$(basename "$FIRST_FILE")
+        echo "[INFO] Uploading $FIRST_NAME (initial file to Gofile)..."
+
+        UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
+            -F "file=@${FIRST_FILE}" \
+            "https://${SERVER}.gofile.io/contents/uploadfile" || true)
+
+        STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
+
+        if [ "$STATUS" == "ok" ]; then
+            echo "✅ Uploaded $FIRST_NAME!"
+            MASTER_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage' 2>/dev/null || true)
+            GUEST_TOKEN=$(echo "$UPLOAD_RES" | jq -r '.data.guestToken' 2>/dev/null || true)
+            FOLDER_ID=$(echo "$UPLOAD_RES" | jq -r '.data.parentFolder' 2>/dev/null || true)
+        else
+            echo "[WARN] Gofile initial upload failed. Switching to Pixeldrain fallback..."
+            USE_PIXELDRAIN=true
+        fi
+
+        if [ "$USE_PIXELDRAIN" == "false" ] && [ ${#FILES_TO_UPLOAD[@]} -gt 1 ]; then
+            echo "[INFO] Uploading remaining $((${#FILES_TO_UPLOAD[@]} - 1)) file(s) to Gofile..."
+            TMP_DIR=$(mktemp -d)
+
+            for i in $(seq 1 $((${#FILES_TO_UPLOAD[@]} - 1))); do
+                (
+                    FILE_PATH="${FILES_TO_UPLOAD[$i]}"
+                    UPLOAD_RES=$(curl -s --retry 3 --connect-timeout 20 --max-time 1800 \
+                        -F "token=$GUEST_TOKEN" \
+                        -F "folderId=$FOLDER_ID" \
+                        -F "file=@${FILE_PATH}" \
+                        "https://${SERVER}.gofile.io/contents/uploadfile" || true)
+                    echo "$UPLOAD_RES" > "$TMP_DIR/res_$i.json"
+                ) &
+            done
+            wait
+
+            for i in $(seq 1 $((${#FILES_TO_UPLOAD[@]} - 1))); do
+                FILE_PATH="${FILES_TO_UPLOAD[$i]}"
+                FILE_NAME=$(basename "$FILE_PATH")
+                UPLOAD_RES=$(cat "$TMP_DIR/res_$i.json" 2>/dev/null || true)
+                STATUS=$(echo "$UPLOAD_RES" | jq -r '.status' 2>/dev/null || true)
+
+                if [ "$STATUS" == "ok" ]; then
+                    echo "✅ Uploaded $FILE_NAME!"
+                else
+                    echo "[WARN] Gofile upload failed for $FILE_NAME."
+                fi
+            done
+            rm -rf "$TMP_DIR"
+        fi
+    fi
+
+    if [ "$USE_PIXELDRAIN" == "true" ] && [ ${#UPLOADED_IDS[@]} -gt 0 ]; then
+        if [ ${#UPLOADED_IDS[@]} -gt 1 ]; then
+            FILES_JSON="["
+            for i in "${!UPLOADED_IDS[@]}"; do
+                FILES_JSON+="{\"id\":\"${UPLOADED_IDS[$i]}\", \"description\":\"\"}"
+                if [ $i -lt $((${#UPLOADED_IDS[@]} - 1)) ]; then
+                    FILES_JSON+=","
+                fi
+            done
+            FILES_JSON+="]"
+
+            LIST_RES=$(curl -s -X POST -u ":$PIXELDRAIN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"title\": \"$ROM_NAME Update\", \"files\": $FILES_JSON}" \
+                "https://pixeldrain.com/api/list" || true)
+
+            LIST_SUCCESS=$(echo "$LIST_RES" | jq -r '.success' 2>/dev/null || true)
+            if [ "$LIST_SUCCESS" == "true" ]; then
+                LIST_ID=$(echo "$LIST_RES" | jq -r '.id' 2>/dev/null || true)
+                MASTER_LINK="https://pixeldrain.com/l/$LIST_ID"
+            else
+                MASTER_LINK="https://pixeldrain.com/u/${UPLOADED_IDS[0]}"
+            fi
+        else
+            MASTER_LINK="https://pixeldrain.com/u/${UPLOADED_IDS[0]}"
+        fi
+    fi
+
+    if [ -n "$MASTER_LINK" ]; then
+        echo "============================================================"
+        echo "🎉 Artifacts Upload Complete!"
+        echo "🔗 Master Download Link: $MASTER_LINK"
+        echo "============================================================"
+    fi
 }
 
 # ============================================================
@@ -447,6 +695,9 @@ JSON_EOF
 sync_repositories
 compile_rom
 process_artifacts
+
+# Finalize and upload build outputs
+upload_and_notify
 
 exec 1>&3 2>&4
 sleep 1
@@ -462,4 +713,7 @@ echo "Size:         ${ROM_SIZE_HUMAN}"
 echo "SHA256:       ${ROM_SHA256}"
 echo "MD5:          ${ROM_MD5}"
 echo "Log:          ${LOG_FILE}"
+if [ -n "$MASTER_LINK" ]; then
+    echo "Download:     ${MASTER_LINK}"
+fi
 echo "============================================================"
