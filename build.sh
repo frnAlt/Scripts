@@ -245,9 +245,13 @@ auto_clean_workspace() {
     rm -f out/soong/build.*.ninja out/.module_paths/Android.bp.list 2>/dev/null || true
 
     # Fix 6: Safely reset ViPER4AndroidFX git tracking state if desynchronized
-    if [ -d "packages/apps/ViPER4AndroidFX" ] && [ ! -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
-        echo "[AUTO-FIX] Removing unlinked packages/apps/ViPER4AndroidFX directory..."
-        rm -rf "packages/apps/ViPER4AndroidFX"
+    if [ -d "packages/apps/ViPER4AndroidFX" ]; then
+        git -C "packages/apps/ViPER4AndroidFX" reset --hard HEAD 2>/dev/null || true
+        git -C "packages/apps/ViPER4AndroidFX" clean -fdx 2>/dev/null || true
+        if [ ! -d ".repo/projects/packages/apps/ViPER4AndroidFX.git" ]; then
+            echo "[AUTO-FIX] Removing unlinked packages/apps/ViPER4AndroidFX directory..."
+            rm -rf "packages/apps/ViPER4AndroidFX"
+        fi
     fi
 
     # Fix 7: Auto-sanitize device.mk to remove non-existent DolbyAtmos
@@ -401,6 +405,9 @@ compile_rom() {
         ccache -M 50G >/dev/null 2>&1 || true
         echo "[INFO] Ccache enabled (${CCACHE_DIR})"
     fi
+
+    # Final workspace sanitization before lunch and compilation
+    auto_clean_workspace
 
     set +eE
     source build/envsetup.sh
