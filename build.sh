@@ -275,6 +275,7 @@ auto_clean_workspace() {
         fi
         if [ ! -d "packages/apps/OptimizationEngine" ]; then
             sed -i '/OptimizationEngine/d' vendor/lineage/config/lunaris.mk
+            sed -i 's/OmniStyle[[:space:]]*\\/OmniStyle/' vendor/lineage/config/lunaris.mk
         fi
     fi
 }
