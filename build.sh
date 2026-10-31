@@ -269,16 +269,37 @@ auto_clean_workspace() {
         fi
     fi
 
-    # Fix 8: Auto-sanitize vendor/lineage/config/lunaris.mk to remove non-existent modules
-    # Prevents fatal Kati errors: "lineage_stone.mk includes non-existent modules in PRODUCT_PACKAGES"
+    # Fix 8: Ensure frameworks/base is synchronized to upstream 16.2
+    # Crave's persistent cache can leave frameworks/base stuck on old detached commits (e.g. de64d90a6),
+    # which lacks packages/SystemUI/clockmaker (LunarisClockMaker) and packages/SystemUI/lockscreenwidgets (LunarisLockscreenWidgets).
+    if [ -d "frameworks/base" ]; then
+        if [ ! -f "frameworks/base/packages/SystemUI/clockmaker/Android.bp" ] || [ ! -f "frameworks/base/packages/SystemUI/lockscreenwidgets/Android.bp" ]; then
+            echo "[AUTO-FIX] frameworks/base is missing clockmaker/lockscreenwidgets modules! Updating to origin/16.2..."
+            git -C "frameworks/base" fetch origin 16.2 --depth=1 2>/dev/null || git -C "frameworks/base" fetch origin 16.2 2>/dev/null || true
+            git -C "frameworks/base" checkout -B 16.2 FETCH_HEAD 2>/dev/null || git -C "frameworks/base" reset --hard origin/16.2 2>/dev/null || true
+            git -C "frameworks/base" clean -fdx 2>/dev/null || true
+        fi
+    fi
+
+    # Fix 9: Auto-sanitize vendor/lineage/config/lunaris.mk & packages/apps/LockStyles
+    # Prevents fatal Soong/Kati errors if packages or static libraries are missing
     if [ -f "vendor/lineage/config/lunaris.mk" ]; then
         echo "[AUTO-FIX] Sanitizing vendor/lineage/config/lunaris.mk (removing non-existent packages)..."
         # 1. Remove AppDataBackup (missing repository upstream in Lunaris-AOSP)
         sed -i '/# Skip AppDataBackup on Pixel devices/,/endif/d' vendor/lineage/config/lunaris.mk
         sed -i '/AppDataBackup/d' vendor/lineage/config/lunaris.mk
 
-        # 2. Remove LunarisLockStyles (missing LunarisClockMaker / LunarisLockscreenWidgets upstream dependencies)
-        sed -i '/LunarisLockStyles/d' vendor/lineage/config/lunaris.mk
+        # 2. Handle LunarisLockStyles dependencies
+        # Soong parses EVERY Android.bp in the workspace. If LunarisClockMaker or LunarisLockscreenWidgets
+        # are missing from frameworks/base, packages/apps/LockStyles MUST be removed from disk;
+        # otherwise Soong stops with undefined module errors even if omitted from PRODUCT_PACKAGES.
+        if [ ! -f "frameworks/base/packages/SystemUI/clockmaker/Android.bp" ] || [ ! -f "frameworks/base/packages/SystemUI/lockscreenwidgets/Android.bp" ]; then
+            echo "[AUTO-FIX] Missing clockmaker/lockscreenwidgets dependencies! Purging packages/apps/LockStyles..."
+            rm -rf "packages/apps/LockStyles"
+            sed -i '/LunarisLockStyles/d' vendor/lineage/config/lunaris.mk
+        else
+            echo "[INFO] LunarisClockMaker and LunarisLockscreenWidgets modules verified in frameworks/base."
+        fi
 
         # 3. Dynamically remove LunarisMonet and OptimizationEngine if not present in tree
         if [ ! -d "packages/apps/LunarisMonet" ]; then
@@ -303,16 +324,25 @@ sync_repositories() {
 
     # Reset any unstaged working tree changes to prevent rebase errors
     git reset --hard HEAD 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    git clean -fdx 2>/dev/null || true
     if [ -d ".repo/manifests" ]; then
         git -C .repo/manifests reset --hard HEAD 2>/dev/null || true
-        git -C .repo/manifests clean -fd 2>/dev/null || true
+        git -C .repo/manifests clean -fdx 2>/dev/null || true
     fi
 
     # Clean uncommitted working tree changes across cached repositories
     if [ -d ".repo" ]; then
         echo "[INFO] Cleaning uncommitted changes across cached repositories..."
-        repo forall -c "git reset --hard HEAD; git clean -fdx" 2>/dev/null || true
+        # Fix stale hooks symlinks and git locks from aborted runs or remote repo migrations
+        find .repo/ -name "*.lock" -type f -delete 2>/dev/null || true
+        find .repo/projects/ -name "hooks" -delete 2>/dev/null || true
+
+        # Clean stale project metadata for repos that changed remote upstream (prevents fatal 'hooks is different' errors)
+        for conflicting_proj in "hardware/lineage/interfaces" "packages/apps/Dialer" "external/conscrypt" "system/ca-certificates"; do
+            rm -rf ".repo/projects/${conflicting_proj}.git" 2>/dev/null || true
+        done
+
+        repo forall -c "git reset --hard HEAD 2>/dev/null || true; git clean -fdx 2>/dev/null || true" 2>/dev/null || true
     fi
 
     # If ViPER working tree or git metadata is mismatched, clean both before repo sync
@@ -329,6 +359,11 @@ sync_repositories() {
     # Apply in-flight manifest patches BEFORE sync
     auto_patch_manifests
 
+    # Reset working tree once more before sync routine to prevent rebase errors
+    if [ -d ".repo" ]; then
+        repo forall -c "git reset --hard HEAD 2>/dev/null || true; git clean -fd 2>/dev/null || true" 2>/dev/null || true
+    fi
+
     if [ -f /opt/crave/resync.sh ]; then
         echo "[INFO] Executing Crave resync routine..."
         /opt/crave/resync.sh
@@ -344,6 +379,14 @@ sync_repositories() {
                 sleep 30
             }
         done
+    fi
+
+    # Ensure frameworks/base is updated to upstream 16.2
+    if [ -d "frameworks/base" ]; then
+        echo "[INFO] Verifying frameworks/base branch state..."
+        git -C "frameworks/base" fetch origin 16.2 --depth=1 2>/dev/null || git -C "frameworks/base" fetch origin 16.2 2>/dev/null || true
+        git -C "frameworks/base" checkout -B 16.2 FETCH_HEAD 2>/dev/null || git -C "frameworks/base" reset --hard origin/16.2 2>/dev/null || true
+        git -C "frameworks/base" clean -fdx 2>/dev/null || true
     fi
 
     # Clean up and sanitize workspace after sync
