@@ -603,6 +603,58 @@ JSON_EOF
             FILES_TO_UPLOAD+=("${TARGET_DIR}/$IMG")
         fi
     done
+
+    # ============================================================
+    # 🧪 Test & Verify ROM Artifacts
+    # ============================================================
+    echo "============================================================"
+    echo "🧪 Running ROM Verification and Integrity Tests..."
+    echo "============================================================"
+
+    # Test 1: Check required images exist
+    for img in boot.img vendor_boot.img dtbo.img; do
+        if [ ! -f "${TARGET_DIR}/$img" ]; then
+            echo "❌ [TEST FAILED] Missing image: $img"
+            handle_error $LINENO
+        fi
+        echo "✅ Found $img ($(du -h "${TARGET_DIR}/$img" | awk '{print $1}'))"
+    done
+
+    # Test 2: Unpack and verify boot.img
+    TEST_DIR="/tmp/rom_test_${DEVICE}_$$"
+    mkdir -p "$TEST_DIR"
+    if [ -f "system/tools/mkbootimg/unpack_bootimg.py" ]; then
+        python3 system/tools/mkbootimg/unpack_bootimg.py --boot_img "${TARGET_DIR}/boot.img" --out "$TEST_DIR/boot" >/dev/null 2>&1
+        if [ -f "$TEST_DIR/boot/kernel" ]; then
+            echo "✅ boot.img unpacked successfully (kernel size: $(du -h "$TEST_DIR/boot/kernel" | awk '{print $1}'))"
+        else
+            echo "❌ [TEST FAILED] boot.img unpack failed or missing kernel"
+            rm -rf "$TEST_DIR"
+            handle_error $LINENO
+        fi
+        rm -rf "$TEST_DIR"
+    fi
+
+    # Test 3: Verify ROM zip integrity
+    echo "[INFO] Testing ZIP archive integrity..."
+    unzip -t "$ROM_ZIP" >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "✅ ROM ZIP archive integrity verified (CRC valid)"
+    else
+        echo "❌ [TEST FAILED] ROM ZIP archive is corrupt"
+        handle_error $LINENO
+    fi
+
+    # Test 4: Verify payload.bin exists
+    if unzip -l "$ROM_ZIP" | grep -q "payload.bin"; then
+        echo "✅ payload.bin found inside ROM package"
+    else
+        echo "❌ [TEST FAILED] payload.bin missing from ROM package"
+        handle_error $LINENO
+    fi
+    echo "============================================================"
+    echo "🎉 All ROM Integrity and Verification Tests Passed!"
+    echo "============================================================"
 }
 
 upload_and_notify() {
@@ -745,6 +797,26 @@ upload_and_notify() {
         echo "🎉 Artifacts Upload Complete!"
         echo "🔗 Master Download Link: $MASTER_LINK"
         echo "============================================================"
+    fi
+
+    # Publish GitHub Release if gh is available
+    if command -v gh &>/dev/null; then
+        GH_REPO="frnAlt/Lunaris_stone"
+        echo "============================================================"
+        echo "[INFO] Publishing GitHub Release to ${GH_REPO}..."
+        echo "============================================================"
+        gh release create "${REL_TAG}" "${FILES_TO_UPLOAD[@]}" \
+            --repo "${GH_REPO}" \
+            --title "Lunaris OS 3.13 for stone (${REL_TAG})" \
+            --notes "### Lunaris OS 3.13 (Android 16.2) for Redmi Note 12 5G / Poco X5 5G (stone)
+- Build: \`${FILE_NAME}\`
+- SHA256: \`${ROM_SHA256}\`
+- MD5: \`${ROM_MD5}\`
+- 120Hz display & keyguard optimization with Kawase Darkmoon blur
+- Battery backup and dynamic refresh rate (0-120Hz) optimization
+- Modern QS panel styles, brightness sliders, and adaptive icon shapes
+- Glass UI toggle in Settings > About Device
+- Adapted Xiaomi MIUI / Leica Camera 5.0 with full stone/sunstone/moonstone device features" || echo "[WARN] GitHub release creation skipped or failed"
     fi
 }
 
