@@ -231,6 +231,12 @@ auto_patch_manifests() {
                 echo "[AUTO-FIX] Updating ViPER4AndroidFX repo target in $xml_file"
                 sed -i 's/name="packages_apps_ViPER4AndroidFX"/name="vendor_viper4"/g' "$xml_file"
             fi
+
+            # Fix 3: Ensure MIUI / Leica Camera repositories are configured in local manifests
+            if ! grep -q "device_xiaomi_camera" "$xml_file" 2>/dev/null; then
+                echo "[AUTO-FIX] Adding MIUI/Leica camera repositories to $xml_file"
+                sed -i '/<\/manifest>/i \  <!-- MIUI / Leica Camera -->\n  <project path="device/xiaomi/camera" name="device_xiaomi_camera" remote="frnAlt" revision="lineage-23.2" />\n  <project path="vendor/xiaomi/camera" name="vendor_xiaomi_camera" remote="frnAlt" revision="lineage-23.2" />' "$xml_file"
+            fi
         done
     fi
 }
@@ -308,6 +314,52 @@ auto_clean_workspace() {
         if [ ! -d "packages/apps/OptimizationEngine" ]; then
             sed -i '/OptimizationEngine/d' vendor/lineage/config/lunaris.mk
             sed -i 's/OmniStyle[[:space:]]*\\/OmniStyle/' vendor/lineage/config/lunaris.mk
+        fi
+    fi
+
+    # Fix 10: Ensure vendor.xiaomi.hardware.misys HAL is declared in device framework matrix
+    # Required for Xiaomi Leica / MIUI camera HAL compatibility in check_vintf
+    local MATRIX_FILE="device/xiaomi/stone/vintf/device_framework_matrix.xml"
+    if [ -f "$MATRIX_FILE" ]; then
+        if ! grep -q "vendor.xiaomi.hardware.misys" "$MATRIX_FILE"; then
+            echo "[AUTO-FIX] Adding vendor.xiaomi.hardware.misys HAL (1.0-4.0) to $MATRIX_FILE..."
+            sed -i '/<\/compatibility-matrix>/i \    <hal format="hidl" optional="true">\n        <name>vendor.xiaomi.hardware.misys</name>\n        <version>1.0</version>\n        <version>2.0</version>\n        <version>3.0</version>\n        <version>4.0</version>\n        <interface>\n            <name>IMiSys</name>\n            <instance>default</instance>\n        </interface>\n    </hal>' "$MATRIX_FILE"
+        fi
+    fi
+
+    # Fix 11: Ensure MIUI / Leica camera support is inherited in device/xiaomi/stone/device.mk
+    local DEVICE_MK="device/xiaomi/stone/device.mk"
+    if [ -f "$DEVICE_MK" ]; then
+        if ! grep -q "device/xiaomi/camera/miuicamera.mk" "$DEVICE_MK"; then
+            echo "[AUTO-FIX] Inheriting device/xiaomi/camera/miuicamera.mk in $DEVICE_MK..."
+            echo -e "\n# Camera\n\$(call inherit-product-if-exists, device/xiaomi/camera/miuicamera.mk)" >> "$DEVICE_MK"
+        fi
+    fi
+
+    # Fix 12: Disable check_elf_files for prebuilt Leica / MIUI camera proprietary blobs
+    local CAM_BP="vendor/xiaomi/camera/Android.bp"
+    if [ -f "$CAM_BP" ]; then
+        if grep -q "check_elf_files: true" "$CAM_BP" 2>/dev/null; then
+            echo "[AUTO-FIX] Disabling check_elf_files in $CAM_BP..."
+            sed -i 's/check_elf_files: true/check_elf_files: false/g' "$CAM_BP"
+        fi
+    fi
+
+    # Fix 13: Drop duplicate vendor_camera_sensor_prop declaration in camera sepolicy
+    local CAM_TE="device/xiaomi/stone/sepolicy/vendor/hal_camera_default.te"
+    if [ -f "$CAM_TE" ]; then
+        if grep -q "vendor_camera_sensor_prop" "$CAM_TE"; then
+            echo "[AUTO-FIX] Dropping duplicate vendor_camera_sensor_prop from $CAM_TE..."
+            sed -i '/vendor_camera_sensor_prop/d' "$CAM_TE"
+        fi
+    fi
+
+    # Fix 14: Ensure vendor/xiaomi/camera namespace is registered in BoardConfig.mk
+    local BOARD_MK="device/xiaomi/stone/BoardConfig.mk"
+    if [ -f "$BOARD_MK" ]; then
+        if ! grep -q "vendor/xiaomi/camera" "$BOARD_MK"; then
+            echo "[AUTO-FIX] Registering vendor/xiaomi/camera namespace in $BOARD_MK..."
+            echo -e "\nPRODUCT_SOONG_NAMESPACES += vendor/xiaomi/camera" >> "$BOARD_MK"
         fi
     fi
 }
